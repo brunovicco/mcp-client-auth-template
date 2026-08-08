@@ -11,22 +11,29 @@ document's main concern.
 
 | Data category | Source | Purpose | Legal/contractual basis | Destination | Retention | Deletion method |
 |---|---|---|---|---|---|---|
-| OAuth access token, refresh token, and registered client credentials (`client_id`, and a `client_secret` only for a confidential Entra registration) | The configured authorization server, via the authorization code + PKCE exchange | Authenticate subsequent MCP tool calls without re-prompting the user every run | Necessary to provide the requested service (RFC 6749/8707 client authentication) | Local file at `MCP_CLIENT_TOKEN_STORAGE_PATH` (default `~/.mcp-client-auth-template/tokens.json`), owner-only permissions | Until the file is deleted or the token is revoked at the authorization server | Delete the file, or unset `MCP_CLIENT_TOKEN_STORAGE_PATH` to use `InMemoryTokenStorage` instead, which retains nothing past the process |
+| OAuth access token, refresh token, and registered client information (`client_id`, issuer binding, and any registration fields returned by a generic DCR authorization server) | The configured authorization server, via the authorization code + PKCE exchange | Authenticate subsequent MCP tool calls without re-prompting the user every run | Necessary to provide the requested service (RFC 6749/8707 client authentication) | Local file at `MCP_CLIENT_TOKEN_STORAGE_PATH` (default `~/.mcp-client-auth-template/tokens.json`), inside a private POSIX directory | Until the file is deleted or the token is revoked at the authorization server | Delete the file, or unset `MCP_CLIENT_TOKEN_STORAGE_PATH` to use `InMemoryTokenStorage` instead, which retains nothing past the process |
 
 ## Controls
 
 - Data minimization: only the token response and client registration fields the SDK's
   `OAuthToken`/`OAuthClientInformationFull` models define are stored - no user profile data is
   requested or persisted beyond what the `scope` configured in `.env` grants.
-- Access control: `FileTokenStorage` writes with owner-only permissions (`0600`) immediately
-  after every write; there is no shared or multi-user storage mode.
-- Encryption in transit: all discovery, registration, and token requests go over HTTPS to the
-  authorization server; the loopback callback listener itself is plain HTTP, but it only ever
-  talks to `127.0.0.1` and only ever receives one request.
-- Encryption at rest: none - `FileTokenStorage` is a permissions-restricted plaintext JSON file,
-  explicitly documented in `docs/adr/0002-oauth21-native-client.md` as a demo convenience, not a
-  production secrets-management recommendation. A real deployment should swap it for an OS
-  keyring or a secrets manager.
+- Access control: on POSIX, `FileTokenStorage` requires the containing directory to be owned by the
+  current uid with mode `0700`, and the JSON file to be a single-link regular file owned by the
+  current uid with mode `0600`. Symbolic-link path components, a symbolic-link token file, hard
+  links, unexpected ownership, and permissive modes fail closed. Windows must use in-memory
+  storage or an OS-native keyring/credential adapter.
+- Write integrity: persistent updates are written to a unique same-directory temporary file,
+  `fsync`ed, atomically installed with `os.replace`, and followed by a directory `fsync`; a failed
+  replacement leaves the previous committed file intact. Reads are capped at 1 MiB and malformed,
+  empty, or non-object JSON fails as corruption rather than silently resetting authentication.
+- Encryption in transit: external OAuth discovery, registration, and token endpoints are HTTPS by
+  default and pass through the SSRF/DNS-pinning boundary in ADR-0006. The native callback itself is
+  plain HTTP only on a literal loopback IP; the hardened listener can reject unrelated or malformed
+  local requests while it waits for the bound authorization response.
+- Encryption at rest: none - `FileTokenStorage` is still plaintext JSON. Filesystem controls reduce
+  accidental/local cross-user disclosure and corruption but are not a substitute for encryption.
+  Higher-assurance deployments should replace it with an OS keyring/keychain or secrets manager.
 - Masking/tokenization: not applicable - tokens are opaque credentials, not maskable personal
   data.
 - Non-production data strategy: tests never call a real authorization server; they use

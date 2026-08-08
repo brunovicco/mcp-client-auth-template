@@ -51,3 +51,14 @@ def test_token_storage_path_expands_the_home_directory() -> None:
     assert settings.token_storage_path is not None
     assert "~" not in str(settings.token_storage_path)
     assert str(settings.token_storage_path).startswith(str(Path.home()))
+
+
+def test_interactive_entra_settings_expose_no_client_secret_field() -> None:
+    settings = Settings(
+        auth_provider="entra",
+        server_url="https://mcp.example.invalid",
+        entra_tenant_id="11111111-1111-1111-1111-111111111111",
+        entra_client_id="client-abc",
+    )
+
+    assert "entra_client_secret" not in type(settings).model_fields

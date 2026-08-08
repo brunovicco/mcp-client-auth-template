@@ -29,6 +29,10 @@ from mcp_client_auth_template.adapters.browser_redirect import open_system_brows
 from mcp_client_auth_template.adapters.entra_client_auth import build_entra_oauth_provider
 from mcp_client_auth_template.adapters.generic_oidc_client_auth import build_generic_oauth_provider
 from mcp_client_auth_template.adapters.loopback_callback_server import LoopbackCallbackServer
+from mcp_client_auth_template.adapters.oauth_discovery_security import (
+    OAuthDiscoverySecurityPolicy,
+    PinnedDnsAsyncTransport,
+)
 from mcp_client_auth_template.adapters.token_storage import FileTokenStorage, InMemoryTokenStorage
 from mcp_client_auth_template.entrypoints.settings import Settings
 
@@ -50,6 +54,35 @@ def build_token_storage(settings: Settings) -> TokenStorage:
     if settings.token_storage_path is None:
         return InMemoryTokenStorage()
     return FileTokenStorage(settings.token_storage_path)
+
+
+def build_oauth_network_policy(settings: Settings) -> OAuthDiscoverySecurityPolicy:
+    """Build the fail-closed outbound policy shared by OAuth HTTP and browser redirects."""
+    return OAuthDiscoverySecurityPolicy(
+        resource_server_url=settings.server_url,
+        allow_insecure_loopback=settings.oauth_allow_insecure_loopback,
+        dns_timeout_seconds=settings.oauth_dns_timeout_seconds,
+        http_timeout_seconds=settings.oauth_http_timeout_seconds,
+        max_oauth_response_bytes=settings.oauth_max_response_bytes,
+    )
+
+
+def build_secure_http_transport(
+    settings: Settings,
+    *,
+    policy: OAuthDiscoverySecurityPolicy,
+    observability: Observability,
+) -> httpx2.AsyncBaseTransport:
+    """Wrap DNS-pinned egress with the existing a2a-otel-kit tracing transport."""
+    secure_transport = PinnedDnsAsyncTransport(
+        policy=policy,
+        transport_factory=httpx2.AsyncHTTPTransport,
+        max_hosts=settings.oauth_max_hosts,
+    )
+    traced = TracingAsyncTransport.wrap(
+        cast(httpx.AsyncBaseTransport, secure_transport), observability
+    )
+    return cast(httpx2.AsyncBaseTransport, traced)
 
 
 def build_observability_settings() -> ObservabilitySettings:
@@ -83,7 +116,6 @@ async def build_oauth_provider(
             server_url=settings.server_url,
             tenant_id=cast(str, settings.entra_tenant_id),
             client_id=cast(str, settings.entra_client_id),
-            client_secret=settings.entra_client_secret,
             redirect_uri=settings.redirect_uri,
             storage=storage,
             redirect_handler=redirect_handler,
@@ -122,6 +154,7 @@ async def run_demo() -> None:
     observability = Observability.configure(build_observability_settings())
     try:
         storage = build_token_storage(settings)
+        network_policy = build_oauth_network_policy(settings)
         loopback = LoopbackCallbackServer(
             host=settings.redirect_host, port=settings.redirect_port, path=settings.redirect_path
         )
@@ -129,27 +162,26 @@ async def run_demo() -> None:
         oauth_provider = await build_oauth_provider(
             settings,
             storage=storage,
-            redirect_handler=open_system_browser,
+            redirect_handler=network_policy.wrap_browser_redirect(
+                loopback.wrap_redirect_handler(open_system_browser)
+            ),
             callback_handler=loopback.wait_for_callback,
         )
 
-        # TracingAsyncTransport is typed against plain httpx's AsyncBaseTransport/Request/Response;
-        # the mcp SDK v2 client uses httpx2, a vendored fork. The two casts below are type
-        # narrowing only: httpx2.AsyncClient._init_transport() does no isinstance check on
-        # `transport`, and TracingAsyncTransport's methods only touch duck-typed request/response
-        # attributes (headers, status_code), so an httpx2 transport works at runtime unmodified.
-        # See docs/adr/0003-observability-via-a2a-otel-kit.md for why this is preferred over
-        # httpx2.alias_httpx() (which affects only runtime imports, not mypy's static resolution).
-        transport = TracingAsyncTransport.wrap(
-            cast(httpx.AsyncBaseTransport, httpx2.AsyncHTTPTransport()), observability
+        # Tracing remains the outer transport so spans keep the logical hostname. The security
+        # transport underneath resolves and pins the actual connect IP without exposing that
+        # implementation detail as the application-level request URL.
+        transport = build_secure_http_transport(
+            settings, policy=network_policy, observability=observability
         )
 
         async with (
             httpx2.AsyncClient(
                 auth=oauth_provider,
                 follow_redirects=True,
+                max_redirects=settings.oauth_max_redirects,
                 timeout=_HTTP_TIMEOUT,
-                transport=cast(httpx2.AsyncBaseTransport, transport),
+                transport=transport,
             ) as http_client,
             build_mcp_client(settings, http_client=http_client) as client,
         ):
