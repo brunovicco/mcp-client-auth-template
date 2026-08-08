@@ -5,9 +5,13 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+
+pytest.importorskip("opentelemetry.sdk.trace", reason="requires the observability extra")
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 from opentelemetry.trace import Status, StatusCode
 
 from mcp_client_auth_template.adapters.observability import (

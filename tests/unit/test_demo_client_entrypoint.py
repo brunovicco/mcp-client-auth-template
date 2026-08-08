@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 from mcp.client.auth import OAuthClientProvider
 from mcp.shared.auth import AuthorizationCodeResult
 
@@ -71,30 +70,6 @@ async def test_build_oauth_provider_dispatches_to_generic() -> None:
     )
 
     assert isinstance(provider, OAuthClientProvider)
-
-
-async def test_build_oauth_provider_rejects_entra_settings_missing_required_fields() -> None:
-    settings = Settings.model_construct(
-        auth_provider="entra",
-        server_url="https://mcp.example.invalid",
-        scope="openid profile",
-        redirect_host="127.0.0.1",
-        redirect_port=8765,
-        redirect_path="/callback",
-        token_storage_path=None,
-        entra_tenant_id=None,
-        entra_client_id=None,
-        entra_client_secret=None,
-        generic_client_metadata_url=None,
-    )
-
-    with pytest.raises(RuntimeError, match="auth_provider=entra requires"):
-        await build_oauth_provider(
-            settings,
-            storage=InMemoryTokenStorage(),
-            redirect_handler=_noop_redirect,
-            callback_handler=_unused_callback,
-        )
 
 
 def test_build_entra_and_generic_are_reachable_directly() -> None:

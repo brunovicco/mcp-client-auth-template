@@ -1,5 +1,10 @@
 # Model Context Protocol policy
 
+> Scope: this document is Codex's own policy for *using* MCP servers as a development tool while
+> working in this repository (which servers it may call, how they're configured, governance). It
+> is not documentation of the MCP client this project builds and ships — see
+> `docs/adr/0002-oauth21-native-client.md` and `docs/ARCHITECTURE.md` for that.
+
 MCP gives Codex structured access to external systems. Every server expands the trust boundary,
 data-egress surface, and possible external actions, so add one only for a documented need.
 

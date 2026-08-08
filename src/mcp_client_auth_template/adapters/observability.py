@@ -11,6 +11,7 @@ import threading
 from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
 from typing import Any
 
+import structlog
 from opentelemetry.context import Context
 from opentelemetry.propagators.textmap import CarrierT
 from opentelemetry.sdk.resources import Resource
@@ -28,6 +29,8 @@ from opentelemetry.trace import (
 )
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.util import types as otel_types
+
+logger = structlog.get_logger(__name__)
 
 type AttributeScalar = str | bool | int | float
 
@@ -309,7 +312,8 @@ class TelemetryLifecycle:
                     )
                 )
                 provider.add_span_processor(BatchSpanProcessor(exporter))
-            except Exception:
+            except Exception as exc:
+                logger.debug("tracing_initialize_failed", error_type=type(exc).__name__)
                 return self._tracer
             self._provider = provider
             self._tracer = SafeTracer(
@@ -325,6 +329,7 @@ class TelemetryLifecycle:
         return _bounded_call(
             lambda: provider.force_flush(timeout_millis=max(0, int(timeout_seconds * 1000))),
             timeout_seconds,
+            operation_name="force_flush",
         )
 
     def shutdown(self, *, timeout_seconds: float = 5.0) -> bool:
@@ -336,10 +341,12 @@ class TelemetryLifecycle:
             provider = self._provider
         if provider is None:
             return True
-        return _bounded_call(provider.shutdown, timeout_seconds)
+        return _bounded_call(provider.shutdown, timeout_seconds, operation_name="shutdown")
 
 
-def _bounded_call(operation: Callable[[], Any], timeout_seconds: float) -> bool:
+def _bounded_call(
+    operation: Callable[[], Any], timeout_seconds: float, *, operation_name: str
+) -> bool:
     completed = threading.Event()
     succeeded = False
 
@@ -348,7 +355,12 @@ def _bounded_call(operation: Callable[[], Any], timeout_seconds: float) -> bool:
         try:
             result = operation()
             succeeded = result is not False
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "tracing_bounded_call_failed",
+                operation=operation_name,
+                error_type=type(exc).__name__,
+            )
             succeeded = False
         finally:
             completed.set()

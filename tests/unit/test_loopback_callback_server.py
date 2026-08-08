@@ -78,6 +78,37 @@ async def test_raises_on_timeout_with_no_callback() -> None:
         await server.wait_for_callback()
 
 
+async def test_raises_on_a_callback_with_neither_code_nor_error() -> None:
+    server = LoopbackCallbackServer(port=18769, timeout_seconds=5)
+
+    async def send_malformed_callback() -> None:
+        await anyio.sleep(0.2)
+        async with httpx2.AsyncClient() as http_client:
+            response = await http_client.get(server.redirect_uri, params={"state": "abc123"})
+            assert response.status_code == 400
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(send_malformed_callback)
+        with pytest.raises(OAuthFlowError, match="had no 'code' or 'error' parameter"):
+            await server.wait_for_callback()
+
+
+async def test_a_request_to_the_wrong_path_gets_a_404_and_the_callback_still_times_out() -> None:
+    wrong_path_url = "http://127.0.0.1:18770/not-the-callback-path"
+    server = LoopbackCallbackServer(port=18770, timeout_seconds=5)
+
+    async def hit_the_wrong_path() -> None:
+        await anyio.sleep(0.2)
+        async with httpx2.AsyncClient() as http_client:
+            response = await http_client.get(wrong_path_url)
+            assert response.status_code == 404
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(hit_the_wrong_path)
+        with pytest.raises(OAuthFlowError, match="timed out"):
+            await server.wait_for_callback()
+
+
 def test_redirect_uri_reflects_host_port_and_path() -> None:
     server = LoopbackCallbackServer(host="127.0.0.1", port=9999, path="/oauth/callback")
 
