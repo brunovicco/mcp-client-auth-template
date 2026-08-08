@@ -6,6 +6,9 @@ from collections.abc import Iterator
 
 import pytest
 import structlog
+
+pytest.importorskip("opentelemetry.sdk", reason="requires `uv sync --extra observability`")
+
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
