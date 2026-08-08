@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import httpx2
+from mcp.client import Client
 from mcp.client.auth import OAuthClientProvider
 from mcp.shared.auth import AuthorizationCodeResult
 
@@ -9,6 +11,7 @@ from mcp_client_auth_template.adapters.entra_client_auth import build_entra_oaut
 from mcp_client_auth_template.adapters.generic_oidc_client_auth import build_generic_oauth_provider
 from mcp_client_auth_template.adapters.token_storage import FileTokenStorage, InMemoryTokenStorage
 from mcp_client_auth_template.entrypoints.demo_client import (
+    build_mcp_client,
     build_oauth_provider,
     build_token_storage,
 )
@@ -77,3 +80,13 @@ def test_build_entra_and_generic_are_reachable_directly() -> None:
     # are the ones actually re-exported for direct use outside the demo, too.
     assert callable(build_entra_oauth_provider)
     assert callable(build_generic_oauth_provider)
+
+
+async def test_build_mcp_client_uses_sdk_v2_auto_negotiation() -> None:
+    settings = Settings(auth_provider="generic", server_url="https://mcp.example.invalid/")
+
+    async with httpx2.AsyncClient() as http_client:
+        client = build_mcp_client(settings, http_client=http_client)
+
+    assert isinstance(client, Client)
+    assert client.mode == "auto"

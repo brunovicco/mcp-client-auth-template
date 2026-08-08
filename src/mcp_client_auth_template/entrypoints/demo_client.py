@@ -20,8 +20,8 @@ import structlog
 from a2a_otel_kit.adapters.mcp import TracingAsyncTransport
 from a2a_otel_kit.application.settings import ObservabilitySettings
 from a2a_otel_kit.entrypoints.observability import Observability
+from mcp.client import Client
 from mcp.client.auth import OAuthClientProvider, TokenStorage
-from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.auth import AuthorizationCodeResult
 
@@ -36,7 +36,7 @@ logger = structlog.get_logger(__name__)
 
 # Mirrors mcp.shared._httpx_utils.create_mcp_http_client's defaults (not used directly
 # since that module isn't part of the SDK's exported public surface): a longer read
-# timeout than connect/write/pool, since the streamable-HTTP transport holds the
+# timeout than connect/write/pool, since the streamable-HTTP transport may hold a
 # response stream open for server-sent events.
 _HTTP_TIMEOUT = httpx2.Timeout(30.0, read=300.0)
 
@@ -102,6 +102,20 @@ async def build_oauth_provider(
     )
 
 
+def build_mcp_client(settings: Settings, *, http_client: httpx2.AsyncClient) -> Client:
+    """Return the SDK v2 high-level client with automatic protocol negotiation.
+
+    ``mode="auto"`` probes ``server/discover`` first. A 2026-07-28 server therefore
+    remains on the modern sessionless protocol path, while older servers are still
+    supported through the SDK-managed legacy initialization fallback.
+    """
+    transport = streamable_http_client(
+        f"{settings.server_url.rstrip('/')}/mcp",
+        http_client=http_client,
+    )
+    return Client(transport, mode="auto")
+
+
 async def run_demo() -> None:
     """Authenticate against the configured provider and call ``whoami`` and ``health``."""
     settings = Settings()  # values come from the environment
@@ -137,18 +151,14 @@ async def run_demo() -> None:
                 timeout=_HTTP_TIMEOUT,
                 transport=cast(httpx2.AsyncBaseTransport, transport),
             ) as http_client,
-            streamable_http_client(f"{settings.server_url}/mcp", http_client=http_client) as (
-                read_stream,
-                write_stream,
-            ),
-            ClientSession(read_stream, write_stream) as session,
+            build_mcp_client(settings, http_client=http_client) as client,
         ):
-            await session.initialize()
+            logger.info("mcp_connected", protocol_version=client.protocol_version)
 
-            whoami = await session.call_tool("whoami")
+            whoami = await client.call_tool("whoami")
             logger.info("whoami", result=whoami.structured_content)
 
-            health = await session.call_tool("health")
+            health = await client.call_tool("health")
             logger.info("health", result=health.structured_content)
     finally:
         observability.shutdown()

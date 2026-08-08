@@ -41,6 +41,13 @@ already registered out of band in the Entra portal.
   storage *before* `OAuthClientProvider` runs its "do I have client info?" check
   - the flow's Step 4 (register) is then skipped entirely, since Entra exposes
     neither a `registration_endpoint` nor CIMD support to hit instead.
+- Issuer binding is security-significant for pre-registered credentials. After
+  Protected Resource Metadata discovery, SDK v2 compares the stored binding with
+  the advertised authorization server before registration or token exchange. A
+  PRM document that unexpectedly points at another AS therefore causes the SDK to
+  discard the Entra credentials instead of presenting a pre-registered client
+  secret to that AS. This repository seeds the binding because SDK v2 deliberately
+  treats older `issuer=None` records as unbound for backward compatibility.
 - The demo entrypoint (`entrypoints/demo_client.py`) wires these adapters
   together and calls the companion server's `whoami` and `health` tools, so the
   full loop - authenticate, connect, call a tool - is one command someone can
@@ -51,11 +58,11 @@ already registered out of band in the Entra portal.
 - Adding a third authorization-server shape means writing one more
   `build_*_oauth_provider` factory function, not touching
   `entrypoints/demo_client.py` beyond its provider dispatch.
-- Because PKCE, discovery, and registration-method selection are the SDK's
-  responsibility, this template cannot silently drift from the specification's
-  flow; it can only get adapter-level details wrong (which redirect URI is
-  registered, whether a token is persisted, whether Entra's pre-registered
-  client is seeded correctly) - exactly what
+- Because PKCE, discovery, issuer comparison, and registration-method selection
+  are the SDK's responsibility, this template cannot silently drift from the
+  specification's flow; it can only get adapter-level details wrong (which
+  redirect URI is registered, whether a token is persisted, whether Entra's
+  pre-registered client is seeded and issuer-bound correctly) - exactly what
   `tests/unit/test_entra_client_auth.py` and
   `tests/unit/test_generic_oidc_client_auth.py` exist to catch.
 - `FileTokenStorage` is a convenience for a single local user running a CLI, not
