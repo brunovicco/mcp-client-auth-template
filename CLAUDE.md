@@ -131,7 +131,8 @@ production data).
 ## Further reading
 
 `docs/ARCHITECTURE.md` (auth-flow sequence diagram), `docs/DEVELOPMENT.md` (container build and
-local setup), `docs/MCP.md`, `docs/PRIVACY.md`, and `docs/adr/` (numbered ADRs, e.g.
+local setup), `docs/MCP.md` (Codex's own MCP tool-use policy — not this project's MCP client
+docs), `docs/PRIVACY.md`, and `docs/adr/` (numbered ADRs, e.g.
 `0001-clean-architecture.md`, `0002-oauth21-native-client.md`) hold detail this file
 intentionally omits — consult them before re-deriving reasoning that's already written down.
 

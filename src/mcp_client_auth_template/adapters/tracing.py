@@ -8,6 +8,10 @@ import os
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+import structlog
+
+logger = structlog.get_logger(__name__)
+
 type TraceScalar = str | int | float | bool | None
 ALLOWED_METADATA_KEYS = frozenset(
     {
@@ -104,8 +108,9 @@ class _LangfuseLlmCallObserver:
                     usage_details=usage_details or None,
                     metadata=safe_metadata,
                 )
-        except Exception:
+        except Exception as exc:
             # Telemetry must not turn a completed model call into a business failure.
+            logger.debug("llm_trace_export_failed", name=name, error_type=type(exc).__name__)
             return
 
 

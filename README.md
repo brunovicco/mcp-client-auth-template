@@ -44,6 +44,33 @@ changes. See `src/mcp_client_auth_template/adapters/` for the two provider facto
 `tests/unit/test_*_client_auth.py` for how each is tested offline (a fake in-memory token
 store, no network, no real IdP needed).
 
+## Auth flow
+
+The full authorization-code + PKCE exchange this client drives, end to end:
+
+```mermaid
+sequenceDiagram
+    participant Client as This CLI client
+    participant Browser as System browser
+    participant AS as Authorization server<br/>(Entra ID / generic OIDC)
+    participant Server as MCP resource server
+
+    Client->>Server: Call a tool, no bearer token
+    Server-->>Client: 401 + WWW-Authenticate
+    Client->>Server: GET /.well-known/oauth-protected-resource
+    Server-->>Client: Protected Resource Metadata (points at AS)
+    Client->>AS: Discover AS metadata + (CIMD or DCR, generic only)
+    Client->>Browser: Open authorization URL (PKCE challenge)
+    Browser->>AS: User authenticates and consents
+    AS-->>Client: Redirect to loopback server with code
+    Client->>AS: Exchange code + verifier for tokens
+    AS-->>Client: Access + refresh tokens
+    Client->>Server: Call the tool again, Authorization: Bearer <token>
+    Server-->>Client: Tool result
+```
+
+See `docs/ARCHITECTURE.md` for the full layer breakdown and cross-cutting decisions behind it.
+
 ## Development
 
 ```bash

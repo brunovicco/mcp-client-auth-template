@@ -46,6 +46,34 @@ outra mudança de código é necessária. Veja `src/mcp_client_auth_template/ada
 factories de provider e `tests/unit/test_*_client_auth.py` para como cada uma é testada offline
 (um token store fake em memória, sem rede, sem IdP real).
 
+## Fluxo de autenticação
+
+A troca completa de authorization code + PKCE que este cliente conduz, de ponta a ponta:
+
+```mermaid
+sequenceDiagram
+    participant Client as Este cliente CLI
+    participant Browser as Browser do sistema
+    participant AS as Authorization server<br/>(Entra ID / OIDC genérico)
+    participant Server as Servidor de recursos MCP
+
+    Client->>Server: Chama uma tool, sem bearer token
+    Server-->>Client: 401 + WWW-Authenticate
+    Client->>Server: GET /.well-known/oauth-protected-resource
+    Server-->>Client: Protected Resource Metadata (aponta para o AS)
+    Client->>AS: Descobre metadados do AS + (CIMD ou DCR, só no genérico)
+    Client->>Browser: Abre a URL de autorização (PKCE challenge)
+    Browser->>AS: Usuário autentica e consente
+    AS-->>Client: Redirect pro servidor loopback com o code
+    Client->>AS: Troca code + verifier por tokens
+    AS-->>Client: Access + refresh tokens
+    Client->>Server: Chama a tool de novo, Authorization: Bearer <token>
+    Server-->>Client: Resultado da tool
+```
+
+Veja `docs/ARCHITECTURE.md` para a divisão completa de camadas e as decisões transversais por trás
+desse fluxo.
+
 ## Desenvolvimento
 
 ```bash

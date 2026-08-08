@@ -11,6 +11,7 @@ token and refresh it silently instead of prompting again.
 """
 
 from collections.abc import Awaitable, Callable
+from typing import cast
 
 import anyio
 import httpx2
@@ -51,14 +52,17 @@ async def build_oauth_provider(
     redirect_handler: Callable[[str], Awaitable[None]],
     callback_handler: Callable[[], Awaitable[AuthorizationCodeResult]],
 ) -> OAuthClientProvider:
-    """Return the adapter matching ``settings.auth_provider``."""
+    """Return the adapter matching ``settings.auth_provider``.
+
+    ``Settings._finalize`` already enforces that ``entra_tenant_id``/``entra_client_id`` are set
+    when ``auth_provider="entra"``; the ``cast`` calls below are type narrowing for mypy, not a
+    second validation pass.
+    """
     if settings.auth_provider == "entra":
-        if not (settings.entra_tenant_id and settings.entra_client_id):
-            raise RuntimeError("auth_provider=entra requires entra_tenant_id and entra_client_id")
         return await build_entra_oauth_provider(
             server_url=settings.server_url,
-            tenant_id=settings.entra_tenant_id,
-            client_id=settings.entra_client_id,
+            tenant_id=cast(str, settings.entra_tenant_id),
+            client_id=cast(str, settings.entra_client_id),
             client_secret=settings.entra_client_secret,
             redirect_uri=settings.redirect_uri,
             storage=storage,
