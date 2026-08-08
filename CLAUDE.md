@@ -21,7 +21,7 @@ the full reasoning and `docs/ARCHITECTURE.md` for the sequence diagram of the au
 
 ```bash
 uv lock --check
-uv sync --frozen --all-groups --extra observability
+uv sync --frozen --all-groups
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src tests
@@ -36,9 +36,9 @@ uv run python scripts/quality_gate.py
 - Run a single test: `uv run pytest tests/unit/test_entra_client_auth.py::test_name`.
 - Run the demo end-to-end (requires a running `mcp-server-auth-template` instance and a `.env`
   copied from `.env.example`): `uv run python -m mcp_client_auth_template.entrypoints.demo_client`.
-- Install the `observability` extra even for local runs — without it,
-  `test_observability.py`/`test_logging.py` skip via `pytest.importorskip` and coverage falls
-  under the required 80% gate. CI always installs it.
+- Observability (`a2a-otel-kit`) is a core dependency, not an extra — `uv sync` always installs it,
+  so there is nothing extra to remember for `tests/unit/test_demo_client_observability.py` or the
+  coverage gate.
 
 ## Architecture
 
@@ -76,19 +76,23 @@ Key adapters:
   CIMD `client_metadata_url` and otherwise lets the SDK choose CIMD or DCR on its own. Adding a
   third authorization-server shape means writing one more factory, not touching
   `entrypoints/demo_client.py` beyond its provider dispatch.
-- `adapters/tracing.py` / `adapters/observability.py` — optional Langfuse LLM tracing and
-  vendor-neutral OpenTelemetry traces, both network-silent unless explicitly configured (extras
-  `tracing` / `observability`).
+- Observability is not a local adapter: `entrypoints/demo_client.py` wires
+  `a2a_otel_kit.entrypoints.observability.Observability` (tracer + structured logging, one facade)
+  and `a2a_otel_kit.adapters.mcp.TracingAsyncTransport` (W3C trace propagation and a CLIENT span
+  per MCP Streamable HTTP request) directly from the third-party `a2a-otel-kit` package, both
+  network-silent unless explicitly configured. See `docs/OBSERVABILITY.md` and
+  `docs/adr/0003-observability-via-a2a-otel-kit.md`.
 
 Entrypoints:
 - `entrypoints/settings.py` — `Settings` (pydantic-settings), env-prefixed `MCP_CLIENT_`, reads
   `.env`. `auth_provider` (`entra`|`generic`) selects which factory `demo_client.py` calls; only
   one provider's config block needs to be filled in.
-- `entrypoints/demo_client.py` — wires storage, browser redirect, and loopback callback into an
+- `entrypoints/demo_client.py` — wires storage, browser redirect, loopback callback, and
+  observability (`a2a-otel-kit`'s `Observability` and `TracingAsyncTransport`) into an
   `OAuthClientProvider`, opens a streamable-HTTP MCP session against `MCP_CLIENT_SERVER_URL`, and
   calls the companion server's `whoami` and `health` tools. This is the one critical flow the
-  service owns end-to-end, not just unit-tested in pieces.
-- `entrypoints/logging.py` — structlog configuration, structured events to stdout/stderr.
+  service owns end-to-end, not just unit-tested in pieces. Structured logging is configured as a
+  side effect of `Observability.configure()`, not a separate step.
 
 Switching providers is a config-only change (`MCP_CLIENT_AUTH_PROVIDER=entra|generic`), no code
 changes. Both provider adapters are tested offline in `tests/unit/test_*_client_auth.py` with a
@@ -132,9 +136,10 @@ production data).
 
 `docs/ARCHITECTURE.md` (auth-flow sequence diagram), `docs/DEVELOPMENT.md` (container build and
 local setup), `docs/MCP.md` (Codex's own MCP tool-use policy — not this project's MCP client
-docs), `docs/PRIVACY.md`, and `docs/adr/` (numbered ADRs, e.g.
-`0001-clean-architecture.md`, `0002-oauth21-native-client.md`) hold detail this file
-intentionally omits — consult them before re-deriving reasoning that's already written down.
+docs), `docs/PRIVACY.md`, `docs/OBSERVABILITY.md`, and `docs/adr/` (numbered ADRs, e.g.
+`0001-clean-architecture.md`, `0002-oauth21-native-client.md`,
+`0003-observability-via-a2a-otel-kit.md`) hold detail this file intentionally omits — consult them
+before re-deriving reasoning that's already written down.
 
 ## Git and completion
 

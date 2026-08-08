@@ -14,7 +14,7 @@ Keep these facts and the commands below current as the project evolves.
 
 ```bash
 uv lock --check
-uv sync --frozen --all-groups --extra observability
+uv sync --frozen --all-groups
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src tests

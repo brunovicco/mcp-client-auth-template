@@ -10,18 +10,14 @@ dependencies = [
     "structlog>=25.1",
     "mcp>=2.0,<3",
     "anyio>=4.8",
-]
-
-[project.optional-dependencies]
-# Opt-in LLM tracing; see docs/LLM_OBSERVABILITY.md. Install with `uv sync --extra tracing`.
-tracing = [
-    "langfuse>=3.0",
-]
-# Vendor-neutral application traces; disabled unless an OTLP endpoint is configured.
-observability = [
-    "opentelemetry-api>=1.36",
-    "opentelemetry-exporter-otlp-proto-http>=1.36",
-    "opentelemetry-sdk>=1.36",
+    # Observability: see docs/OBSERVABILITY.md and docs/adr/0003-observability-via-a2a-otel-kit.md.
+    # Network-silent by default (ObservabilitySettings.enabled=False); a core dependency because
+    # demo_client.py wires it into its actual request path, not optional scaffolding.
+    "a2a-otel-kit>=0.4.2,<0.5",
+    # Plain httpx (distinct from the mcp SDK's vendored httpx2 fork): required only because
+    # a2a_otel_kit.adapters.mcp imports it directly. See the ADR for why a2a-otel-kit's own `mcp`
+    # extra can't be used here (it pins mcp<2.0, conflicting with this project's mcp>=2.0,<3).
+    "httpx>=0.27",
 ]
 
 [dependency-groups]
@@ -99,12 +95,6 @@ mypy_path = "src"
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_decorators = false
-
-[[tool.mypy.overrides]]
-# langfuse is the optional "tracing" extra; not installed by default, so no
-# stubs are available unless a project opts in with `uv sync --extra tracing`.
-module = ["langfuse"]
-ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers --cov=src/mcp_client_auth_template --cov-report=term-missing"

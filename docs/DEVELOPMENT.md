@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-uv sync --frozen --all-groups --extra observability
+uv sync --frozen --all-groups
 ```
 
 The `observability` extra installs the optional OpenTelemetry runtime; without it,

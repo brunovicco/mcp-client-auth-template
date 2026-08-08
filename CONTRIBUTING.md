@@ -4,11 +4,8 @@
 
 ```bash
 uv lock --check
-uv sync --frozen --all-groups --extra observability
+uv sync --frozen --all-groups
 ```
-
-Installing the `observability` extra is not optional for local development: `test_logging.py`
-and `test_observability.py` skip without it, and the suite then fails the 80% coverage gate.
 
 ## Before opening a PR
 
