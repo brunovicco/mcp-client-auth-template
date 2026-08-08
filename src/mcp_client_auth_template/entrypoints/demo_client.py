@@ -14,8 +14,12 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 import anyio
+import httpx
 import httpx2
 import structlog
+from a2a_otel_kit.adapters.mcp import TracingAsyncTransport
+from a2a_otel_kit.application.settings import ObservabilitySettings
+from a2a_otel_kit.entrypoints.observability import Observability
 from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
@@ -26,7 +30,6 @@ from mcp_client_auth_template.adapters.entra_client_auth import build_entra_oaut
 from mcp_client_auth_template.adapters.generic_oidc_client_auth import build_generic_oauth_provider
 from mcp_client_auth_template.adapters.loopback_callback_server import LoopbackCallbackServer
 from mcp_client_auth_template.adapters.token_storage import FileTokenStorage, InMemoryTokenStorage
-from mcp_client_auth_template.entrypoints.logging import configure_logging
 from mcp_client_auth_template.entrypoints.settings import Settings
 
 logger = structlog.get_logger(__name__)
@@ -37,12 +40,29 @@ logger = structlog.get_logger(__name__)
 # response stream open for server-sent events.
 _HTTP_TIMEOUT = httpx2.Timeout(30.0, read=300.0)
 
+_SERVICE_NAME = "mcp-client-auth-template"
+_SERVICE_VERSION = "0.1.0"
+_ENVIRONMENT = "local"
+
 
 def build_token_storage(settings: Settings) -> TokenStorage:
     """Return a persistent :class:`FileTokenStorage` or, with no path configured, in-memory."""
     if settings.token_storage_path is None:
         return InMemoryTokenStorage()
     return FileTokenStorage(settings.token_storage_path)
+
+
+def build_observability_settings() -> ObservabilitySettings:
+    """Build this demo's observability identity; export/logging config comes from the environment.
+
+    Service identity is fixed for this single-entrypoint demo. ``ObservabilitySettings`` reads its
+    remaining fields (``enabled``, ``otlp_endpoint``, ``otlp_timeout_seconds``, ``log_level``,
+    ``log_format``) from ``A2A_OTEL_*``-prefixed environment variables itself; leaving them unset
+    keeps ``enabled=False``, the network-silent default documented in ``docs/OBSERVABILITY.md``.
+    """
+    return ObservabilitySettings(
+        service_name=_SERVICE_NAME, service_version=_SERVICE_VERSION, environment=_ENVIRONMENT
+    )
 
 
 async def build_oauth_provider(
@@ -85,36 +105,53 @@ async def build_oauth_provider(
 async def run_demo() -> None:
     """Authenticate against the configured provider and call ``whoami`` and ``health``."""
     settings = Settings()  # values come from the environment
-    configure_logging(service="mcp-client-auth-template", environment="local", version="0.1.0")
-    storage = build_token_storage(settings)
-    loopback = LoopbackCallbackServer(
-        host=settings.redirect_host, port=settings.redirect_port, path=settings.redirect_path
-    )
+    observability = Observability.configure(build_observability_settings())
+    try:
+        storage = build_token_storage(settings)
+        loopback = LoopbackCallbackServer(
+            host=settings.redirect_host, port=settings.redirect_port, path=settings.redirect_path
+        )
 
-    oauth_provider = await build_oauth_provider(
-        settings,
-        storage=storage,
-        redirect_handler=open_system_browser,
-        callback_handler=loopback.wait_for_callback,
-    )
+        oauth_provider = await build_oauth_provider(
+            settings,
+            storage=storage,
+            redirect_handler=open_system_browser,
+            callback_handler=loopback.wait_for_callback,
+        )
 
-    async with (
-        httpx2.AsyncClient(
-            auth=oauth_provider, follow_redirects=True, timeout=_HTTP_TIMEOUT
-        ) as http_client,
-        streamable_http_client(f"{settings.server_url}/mcp", http_client=http_client) as (
-            read_stream,
-            write_stream,
-        ),
-        ClientSession(read_stream, write_stream) as session,
-    ):
-        await session.initialize()
+        # TracingAsyncTransport is typed against plain httpx's AsyncBaseTransport/Request/Response;
+        # the mcp SDK v2 client uses httpx2, a vendored fork. The two casts below are type
+        # narrowing only: httpx2.AsyncClient._init_transport() does no isinstance check on
+        # `transport`, and TracingAsyncTransport's methods only touch duck-typed request/response
+        # attributes (headers, status_code), so an httpx2 transport works at runtime unmodified.
+        # See docs/adr/0003-observability-via-a2a-otel-kit.md for why this is preferred over
+        # httpx2.alias_httpx() (which affects only runtime imports, not mypy's static resolution).
+        transport = TracingAsyncTransport.wrap(
+            cast(httpx.AsyncBaseTransport, httpx2.AsyncHTTPTransport()), observability
+        )
 
-        whoami = await session.call_tool("whoami")
-        logger.info("whoami", result=whoami.structured_content)
+        async with (
+            httpx2.AsyncClient(
+                auth=oauth_provider,
+                follow_redirects=True,
+                timeout=_HTTP_TIMEOUT,
+                transport=cast(httpx2.AsyncBaseTransport, transport),
+            ) as http_client,
+            streamable_http_client(f"{settings.server_url}/mcp", http_client=http_client) as (
+                read_stream,
+                write_stream,
+            ),
+            ClientSession(read_stream, write_stream) as session,
+        ):
+            await session.initialize()
 
-        health = await session.call_tool("health")
-        logger.info("health", result=health.structured_content)
+            whoami = await session.call_tool("whoami")
+            logger.info("whoami", result=whoami.structured_content)
+
+            health = await session.call_tool("health")
+            logger.info("health", result=health.structured_content)
+    finally:
+        observability.shutdown()
 
 
 def main() -> None:

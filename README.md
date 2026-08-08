@@ -75,7 +75,7 @@ See `docs/ARCHITECTURE.md` for the full layer breakdown and cross-cutting decisi
 
 ```bash
 uv lock --check
-uv sync --frozen --all-groups --extra observability
+uv sync --frozen --all-groups
 uv run pytest
 uv run python scripts/quality_gate.py
 ```

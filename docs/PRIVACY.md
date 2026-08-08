@@ -34,21 +34,19 @@ document's main concern.
   drive a real local socket with synthetic `code`/`state` values only.
 - Logging and tracing restrictions: nothing in `adapters/` or `entrypoints/` logs a token,
   `client_secret`, or authorization code - `entrypoints/demo_client.py` logs only the `whoami`
-  tool's own response (the caller's own identity) and the `health` check. Document any enabled
-  tracing backend, content-capture approval, redaction, retention, and access policy before
-  enabling content-bearing tracing. Generic OpenTelemetry spans are metadata-only: custom
-  attributes pass through a bounded allowlist and must never contain prompts, responses,
-  credentials, authorization headers, personal data, arbitrary URLs, tool output, or production
-  payloads. The public tracing wrappers enforce this policy for span and event attributes,
-  operation names, status descriptions, and exception details. W3C baggage is not propagated by
-  default.
+  tool's own response (the caller's own identity) and the `health` check. OpenTelemetry spans
+  produced by `a2a-otel-kit`'s `Observability`/`TracingAsyncTransport` are metadata-only: custom
+  attributes pass through `a2a_otel_kit.domain.attributes.sanitize_attributes`'s bounded allowlist
+  and must never contain prompts, responses, credentials, authorization headers, personal data,
+  arbitrary URLs, tool output, or production payloads; `TracingAsyncTransport` never reads a
+  request or response body. See `docs/OBSERVABILITY.md` for the full allowlist and configuration
+  reference. W3C baggage is not propagated by default.
 - Data-subject deletion/anonymization: delete `MCP_CLIENT_TOKEN_STORAGE_PATH`'s file, or revoke
   the token/client registration at the authorization server directly.
 - External processors: the configured authorization server is the only external system this
   client calls for authentication; the configured MCP resource server is the only one it calls
-  afterward. If the optional OpenTelemetry or Langfuse tracing extras are enabled, their
-  configured OTLP/Langfuse endpoint becomes an additional external processor - keep it
-  metadata-only per the policy above.
+  afterward. If `A2A_OTEL_ENABLED=true` is configured, the configured `A2A_OTEL_OTLP_ENDPOINT`
+  becomes an additional external processor - keep it metadata-only per the policy above.
 - Incident-response owner: set per deployment - this template does not prescribe one.
 
 ## Prohibited logging
