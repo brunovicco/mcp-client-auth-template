@@ -174,6 +174,7 @@ async def topology() -> AsyncIterator[_Topology]:
                 "MCP_SERVER_AUTH_PROVIDER": "generic",
                 "MCP_SERVER_GENERIC_ISSUER_URL": issuer,
                 "MCP_SERVER_GENERIC_AUDIENCE": f"{server_url}/",
+                "MCP_SERVER_OIDC_ALLOW_INSECURE_LOOPBACK": "true",
                 "LOG_LEVEL": "WARNING",
             }
         )
@@ -269,6 +270,7 @@ async def test_full_oauth_flow_reaches_whoami_over_mcp_2026(topology: _Topology)
         auth_provider="generic",
         server_url=topology.server_url,
         token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
     )
     storage = InMemoryTokenStorage()
     browser = _AuthorizationRedirectHarness()
