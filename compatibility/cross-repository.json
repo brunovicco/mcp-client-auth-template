@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "protocol_version": "2026-07-28",
+  "transport": "streamable-http",
+  "auth_profile": "generic-oidc-oauth-2.1",
+  "required_scope": "mcp:tools:call",
+  "repositories": {
+    "client": "brunovicco/mcp-client-auth-template",
+    "server": "brunovicco/mcp-server-auth-template"
+  },
+  "positive_evidence": [
+    "protected-resource-metadata",
+    "authorization-server-discovery",
+    "dynamic-client-registration",
+    "pkce-s256",
+    "authorization-response-issuer",
+    "resource-indicator",
+    "bearer-access-token",
+    "server-discover",
+    "tools/call:whoami"
+  ],
+  "negative_evidence": [
+    "authorization-server-binding",
+    "wrong-audience",
+    "wrong-issuer",
+    "expired-token",
+    "insufficient-scope",
+    "authorization-response-issuer-mismatch"
+  ]
+}

@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "47 6 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -11,6 +13,7 @@ permissions:
 
 jobs:
   companion-auth-flow:
+    name: MCP 2026-07-28 / companion server main
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -22,6 +25,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           repository: brunovicco/mcp-server-auth-template
+          ref: main
           path: companion-server
 
       - name: Install uv
@@ -36,6 +40,11 @@ jobs:
       - name: Install client dependencies
         run: uv sync --frozen --all-groups
 
+      - name: Verify cross-repository compatibility contract
+        run: |
+          .venv/bin/python scripts/cross_repository_contract.py \
+            --peer-root companion-server
+
       - name: Install companion server into the client test environment
         run: uv pip install --python .venv/bin/python -e companion-server
 
@@ -43,3 +52,14 @@ jobs:
         env:
           MCP_E2E_SERVER_ROOT: ${{ github.workspace }}/companion-server
         run: .venv/bin/python -m pytest -m e2e tests/e2e/test_companion_auth_flow.py --no-cov
+
+      - name: Record compatibility evidence
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Cross-repository compatibility"
+            echo "- protocol: \`2026-07-28\`"
+            echo "- client: \`$(git rev-parse HEAD)\`"
+            echo "- server: \`$(git -C companion-server rev-parse HEAD)\`"
+          } >> "$GITHUB_STEP_SUMMARY"

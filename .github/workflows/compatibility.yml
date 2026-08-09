@@ -1,0 +1,96 @@
+name: compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MCP_MINIMUM_VERSION: "2.0.0"
+  MCP_SUPPORTED_RANGE: ">=2.0,<3"
+
+jobs:
+  python-mcp-sdk:
+    name: Python ${{ matrix.python }} / MCP ${{ matrix.mcp_profile }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+        mcp_profile: ["minimum", "latest"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install matrix Python
+        run: uv python install "${{ matrix.python }}"
+
+      - name: Install locked project dependencies
+        run: uv sync --frozen --all-groups --python "${{ matrix.python }}"
+
+      - name: Select MCP SDK compatibility profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.mcp_profile }}" == "minimum" ]]; then
+            uv pip install --python .venv/bin/python "mcp==${MCP_MINIMUM_VERSION}"
+          else
+            uv pip install --python .venv/bin/python --upgrade "mcp${MCP_SUPPORTED_RANGE}"
+          fi
+          uv pip check
+
+      - name: Verify compatibility contract
+        run: |
+          .venv/bin/python scripts/compatibility_contract.py \
+            --python "${{ matrix.python }}" \
+            --mcp-profile "${{ matrix.mcp_profile }}"
+
+      - name: Run test suite without resyncing the environment
+        run: .venv/bin/python -m pytest --no-cov
+
+  auth-transport:
+    name: ${{ matrix.provider }} / ${{ matrix.transport }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        provider: ["entra", "generic"]
+        transport: ["production-https", "loopback-ipv4", "loopback-ipv6"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install Python 3.13
+        run: uv python install "3.13"
+
+      - name: Install locked project dependencies
+        run: uv sync --frozen --all-groups --python "3.13"
+
+      - name: Verify auth and transport compatibility cell
+        run: |
+          .venv/bin/python scripts/auth_transport_contract.py \
+            --provider "${{ matrix.provider }}" \
+            --transport "${{ matrix.transport }}"
