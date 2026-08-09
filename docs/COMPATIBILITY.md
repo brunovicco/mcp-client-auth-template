@@ -15,6 +15,7 @@ CI verifies both the support floor and the moving compatible edge.
 | MCP protocol reference profile | `2026-07-28` | Versioned pair contract + client-owned E2E |
 | Transport | Streamable HTTP | Production and loopback profiles |
 | Auth providers | Entra ID, generic OIDC | Provider/transport matrix |
+| OAuth modes | interactive (Entra/generic); client credentials (generic) | Unit + pair E2E |
 
 All four Python × MCP-profile cells must pass the repository test suite.
 
@@ -93,11 +94,39 @@ positive/negative evidence.
 
 The client repository owns the live pair check because it initiates OAuth and MCP requests. Its
 E2E workflow compares both contracts and exercises Protected Resource Metadata, authorization
-server discovery, DCR, PKCE S256, resource-bound token exchange, `server/discover`, and
-`tools/call`, plus fail-closed issuer/audience/expiry/scope and RFC 9207 mismatch cases.
+server discovery, the preferred Client ID Metadata Document path, the backwards-compatible DCR
+fallback, PKCE S256, resource-bound token exchange, `server/discover`, and `tools/call`, plus
+the self-describing request envelope and sessionless Streamable HTTP behavior. It also exercises
+fail-closed issuer/audience/expiry/scope, routing-header/envelope mismatch, unsupported protocol
+version, and RFC 9207 mismatch cases.
 
-DCR is retained only as a backwards-compatible generic-OIDC reference path. MCP `2026-07-28`
-prefers Client ID Metadata Documents or pre-registration for new integrations.
+The CIMD profile proves that an advertised `client_id_metadata_document_supported=true` causes the
+configured HTTPS metadata URL to become the public client's `client_id`, with no client secret and
+no DCR request. The fake authorization server treats the document as pre-validated fixture data;
+hosting and authorization-server retrieval of that HTTPS document remain deployment concerns.
+DCR is retained only as a backwards-compatible generic-OIDC reference path.
+
+For modern requests, the client sends the negotiated version in both `MCP-Protocol-Version` and
+`params._meta`, mirrors the JSON-RPC method in `Mcp-Method`, and mirrors the tool name in
+`Mcp-Name`. After bearer admission succeeds, the server delegates envelope validation to the
+official MCP SDK: disagreement returns JSON-RPC `-32020`, while a coherent but unsupported version
+returns `-32022` with the supported/requested version data. Modern responses do not mint
+`Mcp-Session-Id`; any legacy-looking request header is ignored for identity and authorization state.
+
+The pair's progressive-authorization profile keeps `mcp:tools:call` as the initial resource scope
+and protects the example MCP `health` operation with `mcp:tools:health`. An under-scoped request is
+rejected before tool dispatch with one `403 insufficient_scope` challenge containing the complete
+operation requirement. The client reauthorizes with the union of its prior grant and the challenged
+scope, then the SDK repeats that undispatched request once. For Entra, both logical names are
+qualified with the configured Application ID URI and `health` requires a delegated identity.
+
+The pair also exercises the draft `io.modelcontextprotocol/oauth-client-credentials` extension
+with the SDK support floor. The generic client uses a pre-registered ID and
+`client_secret_basic`; the server advertises the capability, and the flow completes discovery,
+resource-bound token acquisition, `whoami`, and non-interactive scope step-up without browser,
+CIMD, DCR, refresh token, or persisted access token. This is a generic-OIDC interoperability
+profile, not an Entra app-only claim. Entra client credentials use `{resource}/.default` and app
+roles and require provider-specific live validation outside this deterministic matrix.
 
 Local pair verification:
 

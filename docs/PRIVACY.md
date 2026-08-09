@@ -5,19 +5,25 @@ holds a bearer token only in process memory for the duration of one request), th
 optionally writes access and refresh tokens to a local file
 (`adapters/token_storage.py:FileTokenStorage`) so a person running the demo is not sent through
 the browser consent screen on every run. That file - not just process memory - is this
-document's main concern.
+document's main concern. Non-interactive mode additionally receives a pre-registered client secret
+from the process environment, uses it only for token-endpoint authentication, and never writes it
+or its acquired access tokens to that file.
 
 ## Data inventory
 
 | Data category | Source | Purpose | Legal/contractual basis | Destination | Retention | Deletion method |
 |---|---|---|---|---|---|---|
 | OAuth access token, refresh token, and registered client information (`client_id`, issuer binding, and any registration fields returned by a generic DCR authorization server) | The configured authorization server, via the authorization code + PKCE exchange | Authenticate subsequent MCP tool calls without re-prompting the user every run | Necessary to provide the requested service (RFC 6749/8707 client authentication) | Local file at `MCP_CLIENT_TOKEN_STORAGE_PATH` (default `~/.mcp-client-auth-template/tokens.json`), inside a private POSIX directory | Until the file is deleted or the token is revoked at the authorization server | Delete the file, or unset `MCP_CLIENT_TOKEN_STORAGE_PATH` to use `InMemoryTokenStorage` instead, which retains nothing past the process |
+| Pre-registered client ID, client secret, and client-credentials access token | Deployment secret manager/environment and configured authorization server | Authenticate an unattended service and call the MCP resource | Necessary to provide the requested service (OAuth Client Credentials extension) | Process memory; the secret is sent only to the discovered token endpoint over the hardened HTTPS path | Process lifetime (access tokens may expire sooner) | Stop the process and rotate/revoke the credential at the authorization server |
 
 ## Controls
 
 - Data minimization: only the token response and client registration fields the SDK's
   `OAuthToken`/`OAuthClientInformationFull` models define are stored - no user profile data is
   requested or persisted beyond what the `scope` configured in `.env` grants.
+- Client-credentials isolation: `Settings` stores the secret as `SecretStr`; machine mode forces
+  `InMemoryTokenStorage`, and the SDK's fixed confidential-client record is not delegated to file
+  storage. Configuration errors identify missing field names only, never values.
 - Access control: on POSIX, `FileTokenStorage` requires the containing directory to be owned by the
   current uid with mode `0700`, and the JSON file to be a single-link regular file owned by the
   current uid with mode `0600`. Symbolic-link path components, a symbolic-link token file, hard

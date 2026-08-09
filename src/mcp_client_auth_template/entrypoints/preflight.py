@@ -1,4 +1,4 @@
-"""Network-silent startup preflight for the interactive MCP client."""
+"""Network-silent startup preflight for the MCP client."""
 
 import argparse
 import json
@@ -128,6 +128,7 @@ def _result_payload(
         "status": "ok",
         "environment": environment,
         "auth_provider": settings.auth_provider,
+        "auth_mode": settings.auth_mode,
         "token_storage": "memory" if settings.token_storage_path is None else "file",
     }
 

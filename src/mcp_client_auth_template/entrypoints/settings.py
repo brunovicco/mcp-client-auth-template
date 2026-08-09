@@ -11,7 +11,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     server_url: str
     scope: str = "openid profile"
+    auth_mode: Literal["interactive", "client_credentials"] = "interactive"
 
     # --- OAuth outbound network hardening ---
     oauth_allow_insecure_loopback: bool = False
@@ -55,6 +56,10 @@ class Settings(BaseSettings):
 
     # --- Generic OIDC mode ---
     generic_client_metadata_url: str | None = None
+
+    # --- OAuth Client Credentials extension (generic OIDC only) ---
+    client_credentials_client_id: str | None = None
+    client_credentials_secret: SecretStr | None = None
 
     @property
     def redirect_uri(self) -> str:
@@ -110,6 +115,13 @@ class Settings(BaseSettings):
         if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in self.scope):
             raise ValueError("scope must not contain control characters")
 
+    @staticmethod
+    def _validate_credential_identifier(value: str, field_name: str) -> None:
+        if not value or value.strip() != value:
+            raise ValueError(f"{field_name} must be a non-empty trimmed string")
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+            raise ValueError(f"{field_name} must not contain control characters")
+
     def _validate_generic_metadata_url(self) -> None:
         if self.generic_client_metadata_url is None:
             return
@@ -159,9 +171,39 @@ class Settings(BaseSettings):
                 raise ValueError(f"{field_name} must be positive")
 
         self._validate_server_url()
-        self._validate_redirect_listener()
+        if self.auth_mode == "interactive":
+            self._validate_redirect_listener()
         self._validate_scope()
         self._validate_generic_metadata_url()
+
+        if self.auth_mode == "client_credentials":
+            if self.auth_provider != "generic":
+                raise ValueError(
+                    "auth_mode=client_credentials currently supports auth_provider=generic only"
+                )
+            if self.generic_client_metadata_url is not None:
+                raise ValueError(
+                    "generic_client_metadata_url is not used with auth_mode=client_credentials"
+                )
+            missing = [
+                name
+                for name, value in (
+                    ("client_credentials_client_id", self.client_credentials_client_id),
+                    ("client_credentials_secret", self.client_credentials_secret),
+                )
+                if value is None or (isinstance(value, str) and not value)
+            ]
+            if missing:
+                raise ValueError(f"auth_mode=client_credentials requires: {', '.join(missing)}")
+            self._validate_credential_identifier(
+                self.client_credentials_client_id or "", "client_credentials_client_id"
+            )
+            secret = self.client_credentials_secret
+            if secret is None or not secret.get_secret_value():
+                raise ValueError("client_credentials_secret must not be empty")
+            # Access tokens from this flow are short-lived and can be reacquired with the
+            # configured credential. Do not persist either tokens or fixed client credentials.
+            self.token_storage_path = None
 
         if self.auth_provider == "entra":
             missing = [

@@ -18,6 +18,9 @@ from mcp.client.auth import OAuthFlowError
 from mcp.shared.auth import AuthorizationCodeResult, OAuthClientInformationFull
 from pydantic import AnyUrl
 
+from mcp_client_auth_template.adapters.client_credentials_auth import (
+    OAUTH_CLIENT_CREDENTIALS_EXTENSION_ID,
+)
 from mcp_client_auth_template.adapters.token_storage import InMemoryTokenStorage
 from mcp_client_auth_template.entrypoints.demo_client import build_mcp_client, build_oauth_provider
 from mcp_client_auth_template.entrypoints.settings import Settings
@@ -36,8 +39,14 @@ if not (_SERVER_ROOT / "src/mcp_server_auth_template").is_dir():
 
 _CLIENT_ROOT = Path(__file__).resolve().parents[2]
 _REQUIRED_SCOPE = "mcp:tools:call"
+_HEALTH_SCOPE = "mcp:tools:health"
 _CALLBACK_URI = "http://127.0.0.1:8765/callback"
 _PROTOCOL_VERSION = "2026-07-28"
+_CIMD_CLIENT_ID = "https://client.example.invalid/oauth/client-metadata.json"
+_MACHINE_CLIENT_ID = "mcp-e2e-machine"
+_MACHINE_CLIENT_CREDENTIAL = "e2e-test-credential"
+_HEADER_MISMATCH = -32020
+_UNSUPPORTED_PROTOCOL_VERSION = -32022
 
 
 @dataclass
@@ -264,8 +273,59 @@ async def _protected_request(topology: _Topology, token: str) -> tuple[int, str]
     return response.status_code, response.headers.get("WWW-Authenticate", "")
 
 
+def _modern_tool_request(protocol_version: str = _PROTOCOL_VERSION) -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "whoami",
+            "arguments": {},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": protocol_version,
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": "envelope-integrity-e2e",
+                    "version": "1.0.0",
+                },
+                "io.modelcontextprotocol/clientCapabilities": {},
+            },
+        },
+    }
+
+
+async def _mcp_request(
+    topology: _Topology,
+    token: str,
+    request: dict[str, object],
+    *,
+    protocol_version: str = _PROTOCOL_VERSION,
+    method: str = "tools/call",
+    name: str = "whoami",
+    session_id: str | None = None,
+) -> httpx2.Response:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "MCP-Protocol-Version": protocol_version,
+        "Mcp-Method": method,
+        "Mcp-Name": name,
+    }
+    if session_id is not None:
+        headers["Mcp-Session-Id"] = session_id
+    async with httpx2.AsyncClient(follow_redirects=False, timeout=5.0) as client:
+        response = await client.request(
+            "POST",
+            f"{topology.server_url}/mcp",
+            headers=headers,
+            json=request,
+        )
+        await response.aread()
+    return response
+
+
 async def test_full_oauth_flow_reaches_whoami_over_mcp_2026(topology: _Topology) -> None:
-    """Exercise 401 -> PRM -> discovery -> DCR -> PKCE -> token -> discover -> tools/call."""
+    """Exercise the backwards-compatible DCR fallback through an authenticated tool call."""
     settings = Settings(
         auth_provider="generic",
         server_url=topology.server_url,
@@ -301,7 +361,256 @@ async def test_full_oauth_flow_reaches_whoami_over_mcp_2026(topology: _Topology)
     assert tokens.access_token
 
     state = await _json_request("GET", f"{topology.issuer}/__test__/state")
-    assert state == {"registrations": 1, "authorizations": 1, "token_exchanges": 1}
+    assert state == {
+        "registrations": 1,
+        "authorizations": 1,
+        "token_exchanges": 1,
+        "authorization_scopes": [_REQUIRED_SCOPE],
+        "client_credentials_exchanges": 0,
+        "client_credentials_scopes": [],
+    }
+
+
+async def test_cimd_first_flow_skips_dynamic_client_registration(
+    topology: _Topology,
+) -> None:
+    """Use the metadata-document URL as client ID when the AS advertises CIMD."""
+    await _json_request(
+        "POST",
+        f"{topology.issuer}/__test__/configure",
+        {"client_id_metadata_document_supported": True},
+    )
+    settings = Settings(
+        auth_provider="generic",
+        server_url=topology.server_url,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+        generic_client_metadata_url=_CIMD_CLIENT_ID,
+    )
+    storage = InMemoryTokenStorage()
+    browser = _AuthorizationRedirectHarness()
+    provider = await build_oauth_provider(
+        settings,
+        storage=storage,
+        redirect_handler=browser.redirect,
+        callback_handler=browser.callback,
+    )
+
+    async with (
+        httpx2.AsyncClient(auth=provider, follow_redirects=True, timeout=30.0) as http_client,
+        build_mcp_client(settings, http_client=http_client) as client,
+    ):
+        assert client.protocol_version == _PROTOCOL_VERSION
+        whoami = await client.call_tool("whoami")
+
+    assert whoami.structured_content is not None
+    assert whoami.structured_content["authenticated"] is True
+    assert whoami.structured_content["client_id"] == _CIMD_CLIENT_ID
+    client_info = await storage.get_client_info()
+    assert client_info is not None
+    assert client_info.client_id == _CIMD_CLIENT_ID
+    assert client_info.client_secret is None
+    assert client_info.token_endpoint_auth_method == "none"
+    assert client_info.issuer == topology.issuer
+
+    state = await _json_request("GET", f"{topology.issuer}/__test__/state")
+    assert state == {
+        "registrations": 0,
+        "authorizations": 1,
+        "token_exchanges": 1,
+        "authorization_scopes": [_REQUIRED_SCOPE],
+        "client_credentials_exchanges": 0,
+        "client_credentials_scopes": [],
+    }
+
+
+async def test_runtime_scope_step_up_preserves_prior_grant_and_completes_health(
+    topology: _Topology,
+) -> None:
+    """Reauthorize once with the prior+challenged scope union and complete the tool call."""
+    settings = Settings(
+        auth_provider="generic",
+        server_url=topology.server_url,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+    )
+    storage = InMemoryTokenStorage()
+    browser = _AuthorizationRedirectHarness()
+    provider = await build_oauth_provider(
+        settings,
+        storage=storage,
+        redirect_handler=browser.redirect,
+        callback_handler=browser.callback,
+    )
+
+    async with (
+        httpx2.AsyncClient(auth=provider, follow_redirects=True, timeout=30.0) as http_client,
+        build_mcp_client(settings, http_client=http_client) as client,
+    ):
+        initial_identity = await client.call_tool("whoami")
+        health = await client.call_tool("health")
+        elevated_identity = await client.call_tool("whoami")
+
+    assert initial_identity.structured_content is not None
+    assert initial_identity.structured_content["scopes"] == [_REQUIRED_SCOPE]
+    assert health.structured_content == {"status": "ok"}
+    assert elevated_identity.structured_content is not None
+    assert elevated_identity.structured_content["scopes"] == [_REQUIRED_SCOPE, _HEALTH_SCOPE]
+
+    tokens = await storage.get_tokens()
+    assert tokens is not None
+    expected_union = f"{_REQUIRED_SCOPE} {_HEALTH_SCOPE}"
+    assert tokens.scope == expected_union
+
+    state = await _json_request("GET", f"{topology.issuer}/__test__/state")
+    assert state == {
+        "registrations": 1,
+        "authorizations": 2,
+        "token_exchanges": 2,
+        "authorization_scopes": [_REQUIRED_SCOPE, expected_union],
+        "client_credentials_exchanges": 0,
+        "client_credentials_scopes": [],
+    }
+
+
+async def test_client_credentials_flow_is_non_interactive_and_steps_up_scopes(
+    topology: _Topology,
+) -> None:
+    """Use fixed machine credentials without browser, CIMD, or dynamic registration."""
+    settings = Settings(
+        auth_provider="generic",
+        auth_mode="client_credentials",
+        server_url=topology.server_url,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+        client_credentials_client_id=_MACHINE_CLIENT_ID,
+        client_credentials_secret=_MACHINE_CLIENT_CREDENTIAL,
+    )
+    storage = InMemoryTokenStorage()
+    provider = await build_oauth_provider(settings, storage=storage)
+
+    async with (
+        httpx2.AsyncClient(auth=provider, follow_redirects=True, timeout=30.0) as http_client,
+        build_mcp_client(settings, http_client=http_client) as client,
+    ):
+        assert client.protocol_version == _PROTOCOL_VERSION
+        assert client.server_capabilities.extensions == {OAUTH_CLIENT_CREDENTIALS_EXTENSION_ID: {}}
+        initial_identity = await client.call_tool("whoami")
+        health = await client.call_tool("health")
+        elevated_identity = await client.call_tool("whoami")
+
+    assert initial_identity.structured_content is not None
+    assert initial_identity.structured_content == {
+        "authenticated": True,
+        "client_id": _MACHINE_CLIENT_ID,
+        "subject": _MACHINE_CLIENT_ID,
+        "scopes": [_REQUIRED_SCOPE],
+    }
+    assert health.structured_content == {"status": "ok"}
+    assert elevated_identity.structured_content is not None
+    assert elevated_identity.structured_content["scopes"] == [_REQUIRED_SCOPE, _HEALTH_SCOPE]
+
+    tokens = await storage.get_tokens()
+    assert tokens is not None
+    expected_union = f"{_REQUIRED_SCOPE} {_HEALTH_SCOPE}"
+    assert tokens.scope == expected_union
+    assert await storage.get_client_info() is None
+
+    state = await _json_request("GET", f"{topology.issuer}/__test__/state")
+    assert state == {
+        "registrations": 0,
+        "authorizations": 0,
+        "token_exchanges": 2,
+        "authorization_scopes": [],
+        "client_credentials_exchanges": 2,
+        "client_credentials_scopes": [_REQUIRED_SCOPE, expected_union],
+    }
+
+
+async def test_client_credentials_rejects_an_invalid_secret_without_leaking_it(
+    topology: _Topology,
+) -> None:
+    """Fail closed at the token endpoint and keep the configured credential out of errors."""
+    invalid_credential = "invalid-e2e-credential"
+    settings = Settings(
+        auth_provider="generic",
+        auth_mode="client_credentials",
+        server_url=topology.server_url,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+        client_credentials_client_id=_MACHINE_CLIENT_ID,
+        client_credentials_secret=invalid_credential,
+    )
+    provider = await build_oauth_provider(settings, storage=InMemoryTokenStorage())
+
+    with pytest.RaisesGroup(OAuthFlowError) as raised:
+        async with (
+            httpx2.AsyncClient(auth=provider, follow_redirects=True, timeout=30.0) as http_client,
+            build_mcp_client(settings, http_client=http_client),
+        ):
+            pytest.fail("invalid client credentials unexpectedly connected")
+
+    assert invalid_credential not in str(raised.value)
+    state = await _json_request("GET", f"{topology.issuer}/__test__/state")
+    assert state == {
+        "registrations": 0,
+        "authorizations": 0,
+        "token_exchanges": 0,
+        "authorization_scopes": [],
+        "client_credentials_exchanges": 0,
+        "client_credentials_scopes": [],
+    }
+
+
+async def test_modern_request_envelope_integrity_and_sessionless_transport(
+    topology: _Topology,
+) -> None:
+    """Exercise the modern routing-header, version, and sessionless boundary."""
+    token = await _mint_token(topology, scope=f"{_REQUIRED_SCOPE} {_HEALTH_SCOPE}")
+    accepted = await _mcp_request(
+        topology,
+        token,
+        _modern_tool_request(),
+        session_id="legacy-session-id-must-not-create-state",
+    )
+
+    assert accepted.status_code == 200
+    assert "mcp-session-id" not in accepted.headers
+    accepted_payload = cast(dict[str, object], accepted.json())
+    result = cast(dict[str, object], accepted_payload["result"])
+    structured_content = cast(dict[str, object], result["structuredContent"])
+    assert structured_content["authenticated"] is True
+
+    for mismatched_headers in (
+        {"method": "tools/list"},
+        {"name": "health"},
+    ):
+        rejected = await _mcp_request(
+            topology,
+            token,
+            _modern_tool_request(),
+            **mismatched_headers,
+        )
+        assert rejected.status_code == 400
+        rejected_payload = cast(dict[str, object], rejected.json())
+        error = cast(dict[str, object], rejected_payload["error"])
+        assert error["code"] == _HEADER_MISMATCH
+
+    requested_version = "2099-01-01"
+    unsupported = await _mcp_request(
+        topology,
+        token,
+        _modern_tool_request(requested_version),
+        protocol_version=requested_version,
+    )
+    assert unsupported.status_code == 400
+    unsupported_payload = cast(dict[str, object], unsupported.json())
+    error = cast(dict[str, object], unsupported_payload["error"])
+    assert error["code"] == _UNSUPPORTED_PROTOCOL_VERSION
+    assert error["data"] == {
+        "supported": [_PROTOCOL_VERSION],
+        "requested": requested_version,
+    }
 
 
 async def test_changed_authorization_server_discards_bound_registration(

@@ -14,11 +14,22 @@ _REQUIRED_POSITIVE_EVIDENCE = frozenset(
     {
         "protected-resource-metadata",
         "authorization-server-discovery",
+        "client-id-metadata-document",
         "dynamic-client-registration",
         "pkce-s256",
         "authorization-response-issuer",
         "resource-indicator",
         "bearer-access-token",
+        "oauth-client-credentials-extension",
+        "client-secret-basic",
+        "non-interactive-token-acquisition",
+        "client-credentials-scope-step-up",
+        "self-describing-request-envelope",
+        "mcp-method-and-name-headers",
+        "sessionless-streamable-http",
+        "runtime-scope-step-up",
+        "scope-union-reauthorization",
+        "pre-dispatch-step-up-retry",
         "server-discover",
         "tools/call:whoami",
     }
@@ -30,6 +41,9 @@ _REQUIRED_NEGATIVE_EVIDENCE = frozenset(
         "wrong-issuer",
         "expired-token",
         "insufficient-scope",
+        "invalid-client-credential",
+        "request-header-envelope-mismatch",
+        "unsupported-protocol-version",
         "authorization-response-issuer-mismatch",
     }
 )
