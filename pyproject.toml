@@ -28,11 +28,19 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.31.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_client_auth_template"]
+
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "src/mcp_client_auth_template",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.pt-BR.md",
+]
 
 [tool.ruff]
 target-version = "py313"
