@@ -312,6 +312,7 @@ async def test_changed_authorization_server_discards_bound_registration(
         auth_provider="generic",
         server_url=topology.server_url,
         token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
     )
     storage = InMemoryTokenStorage()
     await storage.set_client_info(
@@ -399,6 +400,7 @@ async def test_rfc9207_authorization_response_issuer_mismatch_is_rejected(
         auth_provider="generic",
         server_url=topology.server_url,
         token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
     )
     storage = InMemoryTokenStorage()
     browser = _AuthorizationRedirectHarness()

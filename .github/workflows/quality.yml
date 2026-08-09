@@ -32,5 +32,14 @@ jobs:
       - name: Install dependencies, including observability tests
         run: uv sync --frozen --all-groups
 
+      - name: Production configuration preflight
+        env:
+          APP_ENV: production
+          MCP_CLIENT_SERVER_URL: https://mcp.acme.com
+          MCP_CLIENT_AUTH_PROVIDER: entra
+          MCP_CLIENT_ENTRA_TENANT_ID: 11111111-1111-1111-1111-111111111111
+          MCP_CLIENT_ENTRA_CLIENT_ID: 22222222-2222-2222-2222-222222222222
+        run: uv run python -m mcp_client_auth_template.entrypoints.preflight --json
+
       - name: Project quality gate
         run: uv run python scripts/quality_gate.py

@@ -5,8 +5,11 @@ Exactly one authorization-server mode is active per run: set
 matching block below. See ``.env.example`` for a filled-out sample of each.
 """
 
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
+from uuid import UUID
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -27,6 +30,16 @@ class Settings(BaseSettings):
     oauth_max_response_bytes: int = 1_048_576
     oauth_max_redirects: int = 5
     oauth_max_hosts: int = 16
+    oauth_callback_timeout_seconds: float = 300.0
+    oauth_callback_max_requests: int = 32
+
+    # --- MCP/HTTP operational budgets ---
+    http_connect_timeout_seconds: float = 10.0
+    http_read_timeout_seconds: float = 300.0
+    http_write_timeout_seconds: float = 30.0
+    http_pool_timeout_seconds: float = 10.0
+    tool_call_timeout_seconds: float = 60.0
+    shutdown_timeout_seconds: float = 10.0
 
     redirect_host: str = "127.0.0.1"
     redirect_port: int = 8765
@@ -46,7 +59,73 @@ class Settings(BaseSettings):
     @property
     def redirect_uri(self) -> str:
         """The loopback URI to register as this client's ``redirect_uri``."""
-        return f"http://{self.redirect_host}:{self.redirect_port}{self.redirect_path}"
+        host = f"[{self.redirect_host}]" if ":" in self.redirect_host else self.redirect_host
+        return f"http://{host}:{self.redirect_port}{self.redirect_path}"
+
+    def _validate_server_url(self) -> None:
+        parsed = urlsplit(self.server_url)
+        if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+            raise ValueError("server_url must be an absolute http(s) URL")
+        if (
+            parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("server_url must not contain credentials, query, or fragment")
+        if parsed.scheme == "http" and not self.oauth_allow_insecure_loopback:
+            raise ValueError(
+                "HTTP server_url requires oauth_allow_insecure_loopback=true for local development"
+            )
+        if parsed.scheme == "http":
+            host = parsed.hostname
+            if host != "localhost":
+                try:
+                    address = ip_address(host)
+                except ValueError as exc:
+                    raise ValueError("HTTP server_url is allowed only for loopback hosts") from exc
+                if not address.is_loopback:
+                    raise ValueError("HTTP server_url is allowed only for loopback hosts")
+
+    def _validate_redirect_listener(self) -> None:
+        try:
+            address = ip_address(self.redirect_host)
+        except ValueError as exc:
+            raise ValueError("redirect_host must be an IP-literal loopback address") from exc
+        if not address.is_loopback:
+            raise ValueError("redirect_host must be an IP-literal loopback address")
+        if not 1 <= self.redirect_port <= 65535:
+            raise ValueError("redirect_port must be between 1 and 65535")
+        if (
+            not self.redirect_path.startswith("/")
+            or "?" in self.redirect_path
+            or "#" in self.redirect_path
+            or "\\" in self.redirect_path
+        ):
+            raise ValueError("redirect_path must be an absolute path without query or fragment")
+
+    def _validate_scope(self) -> None:
+        if not self.scope.strip() or self.scope.strip() != self.scope:
+            raise ValueError("scope must be a non-empty trimmed string")
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in self.scope):
+            raise ValueError("scope must not contain control characters")
+
+    def _validate_generic_metadata_url(self) -> None:
+        if self.generic_client_metadata_url is None:
+            return
+        parsed = urlsplit(self.generic_client_metadata_url)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "generic_client_metadata_url must be an absolute HTTPS URL without credentials, "
+                "query, or fragment"
+            )
 
     @model_validator(mode="after")
     def _finalize(self) -> "Settings":
@@ -63,6 +142,26 @@ class Settings(BaseSettings):
             raise ValueError("oauth_max_redirects must be zero or positive")
         if self.oauth_max_hosts <= 0:
             raise ValueError("oauth_max_hosts must be positive")
+        if self.oauth_callback_timeout_seconds <= 0:
+            raise ValueError("oauth_callback_timeout_seconds must be positive")
+        if self.oauth_callback_max_requests <= 0:
+            raise ValueError("oauth_callback_max_requests must be positive")
+
+        for field_name, value in (
+            ("http_connect_timeout_seconds", self.http_connect_timeout_seconds),
+            ("http_read_timeout_seconds", self.http_read_timeout_seconds),
+            ("http_write_timeout_seconds", self.http_write_timeout_seconds),
+            ("http_pool_timeout_seconds", self.http_pool_timeout_seconds),
+            ("tool_call_timeout_seconds", self.tool_call_timeout_seconds),
+            ("shutdown_timeout_seconds", self.shutdown_timeout_seconds),
+        ):
+            if value <= 0:
+                raise ValueError(f"{field_name} must be positive")
+
+        self._validate_server_url()
+        self._validate_redirect_listener()
+        self._validate_scope()
+        self._validate_generic_metadata_url()
 
         if self.auth_provider == "entra":
             missing = [
@@ -75,4 +174,12 @@ class Settings(BaseSettings):
             ]
             if missing:
                 raise ValueError(f"auth_provider=entra requires: {', '.join(missing)}")
+            try:
+                self.entra_tenant_id = str(UUID(self.entra_tenant_id or ""))
+            except ValueError as exc:
+                raise ValueError("entra_tenant_id must be a tenant-specific UUID") from exc
+            try:
+                self.entra_client_id = str(UUID(self.entra_client_id or ""))
+            except ValueError as exc:
+                raise ValueError("entra_client_id must be an application UUID") from exc
         return self
