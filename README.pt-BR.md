@@ -30,7 +30,7 @@ Veja `docs/adr/0002-oauth21-native-client.md` e a ADR-0018 para o raciocínio co
 
 ## Compatibilidade
 
-A release `v0.2.0` suporta Python **3.13 e 3.14**, MCP Python SDK **2.x**
+A release `v0.3.0` suporta Python **3.13 e 3.14**, MCP Python SDK **2.x**
 (`>=2.0,<3`) e o perfil de referência MCP **2026-07-28**. O CI exercita continuamente o piso do
 SDK (`2.0.0`) e o 2.x compatível mais recente, os dois providers de autenticação, HTTPS de
 produção, perfis locais IPv4/IPv6 explicitamente habilitados e E2Es OAuth/MCP reais para CIMD-first

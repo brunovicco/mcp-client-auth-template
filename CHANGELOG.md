@@ -7,6 +7,35 @@ pre-1.0 and remains a reference template under active development.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-09
+
+### Added
+
+- Non-interactive OAuth Client Credentials mode for generic OIDC authorization servers.
+- MCP OAuth Client Credentials extension advertisement.
+- Client ID Metadata Document-first interactive OAuth interoperability.
+- MCP `2026-07-28` self-describing request envelopes.
+- Sessionless Streamable HTTP behavior and protocol-version negotiation.
+- Runtime scope step-up with scope-union reauthorization.
+- Positive and fail-closed cross-repository E2E scenarios.
+- ADRs covering CIMD, modern request envelopes, runtime scope step-up, and Client Credentials.
+
+### Changed
+
+- Public package version is now `0.3.0`.
+- The cross-repository contract now covers interactive and machine-to-machine authentication.
+- Machine mode bypasses browser callbacks, CIMD, Dynamic Client Registration, and persistent token
+  storage.
+- Dynamic Client Registration remains only as a backwards-compatible generic OIDC path.
+
+### Security
+
+- Client secrets are represented with `SecretStr` and remain memory-only.
+- Machine-mode tokens and credentials are never written to persistent token storage.
+- Invalid client credentials fail closed without exposing secret values.
+- Authorization-server binding and exact MCP resource bearer boundaries remain enforced.
+- Generic client credentials remain distinct from Microsoft Entra app-only authorization.
+
 ## [0.2.0] - 2026-08-09
 
 ### Added
@@ -41,5 +70,6 @@ pre-1.0 and remains a reference template under active development.
   and durability checks.
 - HTTP loopback development requires explicit opt-in; production remains HTTPS-only.
 
-[Unreleased]: https://github.com/brunovicco/mcp-client-auth-template/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/brunovicco/mcp-client-auth-template/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/brunovicco/mcp-client-auth-template/releases/tag/v0.3.0
 [0.2.0]: https://github.com/brunovicco/mcp-client-auth-template/releases/tag/v0.2.0
