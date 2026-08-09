@@ -12,7 +12,7 @@ or its acquired access tokens to that file.
 ## Data inventory
 
 | Data category | Source | Purpose | Legal/contractual basis | Destination | Retention | Deletion method |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | OAuth access token, refresh token, and registered client information (`client_id`, issuer binding, and any registration fields returned by a generic DCR authorization server) | The configured authorization server, via the authorization code + PKCE exchange | Authenticate subsequent MCP tool calls without re-prompting the user every run | Necessary to provide the requested service (RFC 6749/8707 client authentication) | Local file at `MCP_CLIENT_TOKEN_STORAGE_PATH` (default `~/.mcp-client-auth-template/tokens.json`), inside a private POSIX directory | Until the file is deleted or the token is revoked at the authorization server | Delete the file, or unset `MCP_CLIENT_TOKEN_STORAGE_PATH` to use `InMemoryTokenStorage` instead, which retains nothing past the process |
 | Pre-registered client ID, client secret, and client-credentials access token | Deployment secret manager/environment and configured authorization server | Authenticate an unattended service and call the MCP resource | Necessary to provide the requested service (OAuth Client Credentials extension) | Process memory; the secret is sent only to the discovered token endpoint over the hardened HTTPS path | Process lifetime (access tokens may expire sooner) | Stop the process and rotate/revoke the credential at the authorization server |
 
@@ -46,8 +46,8 @@ or its acquired access tokens to that file.
   `InMemoryTokenStorage` or a `tmp_path`-scoped `FileTokenStorage`, and the loopback-server tests
   drive a real local socket with synthetic `code`/`state` values only.
 - Logging and tracing restrictions: nothing in `adapters/` or `entrypoints/` logs a token,
-  `client_secret`, or authorization code - `entrypoints/demo_client.py` logs only the `whoami`
-  tool's own response (the caller's own identity) and the `health` check. OpenTelemetry spans
+  `client_secret`, authorization code, or tool result. `entrypoints/demo_client.py` emits only the
+  completed tool name for successful `whoami` and `health` calls. OpenTelemetry spans
   produced by `a2a-otel-kit`'s `Observability`/`TracingAsyncTransport` are metadata-only: custom
   attributes pass through `a2a_otel_kit.domain.attributes.sanitize_attributes`'s bounded allowlist
   and must never contain prompts, responses, credentials, authorization headers, personal data,

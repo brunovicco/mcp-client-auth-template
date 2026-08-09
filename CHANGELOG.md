@@ -7,12 +7,18 @@ pre-1.0 and remains a reference template under active development.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-09
+
 ### Changed
 
+- Public package version is now `0.4.0`.
 - Upgraded to `a2a-otel-kit[mcp]>=0.6,<0.7` and its native MCP SDK 2.x/HTTPX2 observability
   boundary.
 - Removed the direct plain-HTTPX dependency and the nominal cross-package casts that were needed
   by the previous adapter.
+- Reworked the English and Brazilian Portuguese READMEs around adoption, architecture, security,
+  engineering evidence, operations, and explicit production boundaries.
+- Excluded local `.claude/` state from Docker build contexts.
 
 ### Security
 
@@ -83,6 +89,7 @@ pre-1.0 and remains a reference template under active development.
   and durability checks.
 - HTTP loopback development requires explicit opt-in; production remains HTTPS-only.
 
-[Unreleased]: https://github.com/brunovicco/mcp-client-auth-template/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/brunovicco/mcp-client-auth-template/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/brunovicco/mcp-client-auth-template/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/brunovicco/mcp-client-auth-template/releases/tag/v0.3.0
 [0.2.0]: https://github.com/brunovicco/mcp-client-auth-template/releases/tag/v0.2.0
