@@ -53,7 +53,7 @@ from mcp_client_auth_template.entrypoints.settings import Settings
 logger = structlog.get_logger(__name__)
 
 _SERVICE_NAME = "mcp-client-auth-template"
-_SERVICE_VERSION = "0.3.0"
+_SERVICE_VERSION = "0.4.0"
 _ENVIRONMENT = "local"
 
 

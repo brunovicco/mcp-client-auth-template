@@ -9,100 +9,166 @@
 
 *[Read in English](README.md)*
 
-Um template reutilizável de cliente MCP interativo nativo/CLI ou serviço não interativo que
-autentica contra um authorization server OAuth 2.1 - Microsoft Entra ID ou qualquer authorization
-server OIDC compatível com o padrão
-(Auth0, Keycloak, WorkOS AuthKit, ...) - e então chama tools num servidor MCP. Alvo: especificação
-MCP **2026-07-28**. Este é a metade cliente do padrão em
-[`mcp-server-auth-template`](https://github.com/brunovicco/mcp-server-auth-template); os dois são
-feitos pra rodar um contra o outro, mas cada um também se sustenta sozinho como ponto de partida.
+> Um template de cliente OAuth 2.1 para MCP remoto, pensado para produção: Authorization Code +
+> PKCE interativo, Client Credentials sem usuário, fronteiras de token endurecidas e evidência real
+> de interoperabilidade contra um servidor companheiro.
 
-Os providers OAuth do MCP Python SDK oficial tratam descoberta de Protected Resource Metadata
-e do authorization server, PKCE, refresh de token, validação de issuer RFC 9207, credenciais
-vinculadas ao issuer, Client ID Metadata Documents quando anunciados e fallback para Dynamic
-Client Registration onde suportado. O MCP `2026-07-28` deprecia DCR em favor de Client ID Metadata
-Documents para novas integrações. O modo Entra, portanto, usa um cliente público pré-registrado.
-Este template fornece as peças que a aplicação precisa embutir - armazenamento de token, abertura
-do browser, recebimento do redirect e o adapter de pré-registro do Entra - sem redescobrir essas
-fronteiras de segurança em cada cliente. O template também expõe a extensão draft OAuth Client
-Credentials para um cliente confidencial OIDC genérico pré-registrado, sem browser, CIMD ou DCR.
-Veja `docs/adr/0002-oauth21-native-client.md` e a ADR-0018 para o raciocínio completo.
+Use este projeto para criar um cliente MCP nativo/CLI ou de serviço sem reimplementar integração
+com browser, callback loopback, armazenamento de tokens, discovery do authorization server,
+autorização progressiva e transporte HTTP seguro. O alvo é o perfil de referência MCP
+**2026-07-28**, em conjunto com o
+[`mcp-server-auth-template`](https://github.com/brunovicco/mcp-server-auth-template).
 
-## Compatibilidade
+## Por que este template existe
 
-A release `v0.3.0` suporta Python **3.13 e 3.14**, MCP Python SDK **2.x**
-(`>=2.0,<3`) e o perfil de referência MCP **2026-07-28**. O CI exercita continuamente o piso do
-SDK (`2.0.0`) e o 2.x compatível mais recente, os dois providers de autenticação, HTTPS de
-produção, perfis locais IPv4/IPv6 explicitamente habilitados e E2Es OAuth/MCP reais para CIMD-first
-e fallback DCR contra o servidor companheiro. A mesma suíte cobre client credentials OIDC genérico.
+- **Use o SDK oficial nas fronteiras certas.** Discovery OAuth, PKCE, refresh de token, resource
+  indicators, negociação de protocolo e recuperação de scopes permanecem em APIs públicas do SDK.
+- **Atenda pessoas e workloads.** Rode de forma interativa com Entra ID ou OIDC genérico, ou use um
+  cliente confidencial OIDC genérico pré-registrado para jobs sem usuário.
+- **Mantenha credenciais dentro de limites explícitos.** Discovery endurecido, DNS pinning, destino
+  exato do bearer, callbacks loopback limitados e arquivo de tokens defensivo falham de forma segura.
+- **Avalie comportamento, não promessas.** Um workflow dedicado executa o cliente real contra o
+  servidor real em cenários OAuth/MCP positivos e negativos.
 
-Veja [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) para a política executável de suporte e seu
-escopo. Interoperabilidade ao vivo com IdPs específicos não é reivindicada pela matriz local
-determinística.
+## Para quem é
 
-## Início rápido (auth)
+| Público | O que pode avaliar ou reutilizar |
+| --- | --- |
+| Desenvolvedores | Um cliente OAuth/MCP executável, adapters de provider, storage seguro e harness E2E headless |
+| Tech leads e CTOs | Ownership dos fluxos de identidade, dados, falhas, compatibilidade e rollout |
+| Revisores técnicos | Evidências concretas de integração de protocolos, segurança, tipagem estrita, profundidade de testes e julgamento arquitetural |
 
-1. Copie `.env.example` para `.env` e preencha um dos dois blocos de provider (Entra ID ou um
-   authorization server OIDC genérico), e aponte `MCP_CLIENT_SERVER_URL` para uma instância
-   rodando do template de servidor.
-2. Rode a demo:
+## Visão rápida
 
-   ```bash
-   uv run python -m mcp_client_auth_template.entrypoints.demo_client
-   ```
-3. Com `MCP_CLIENT_AUTH_MODE=interactive` (o padrão), a primeira execução abre seu browser pro
-   fluxo de authorization code + PKCE, espera num
-   listener loopback local (`http://127.0.0.1:8765/callback` por padrão) pelo redirect, troca o
-   code por tokens, e chama as tools `whoami` e `health` do servidor.
-4. Com `MCP_CLIENT_TOKEN_STORAGE_PATH` configurado (o padrão,
-   `~/.mcp-client-auth-template/tokens.json`), execuções seguintes reusam e renovam o token
-   silenciosamente em vez de pedir autenticação de novo. Deixe vazio pra usar armazenamento
-   apenas em memória.
+| Dimensão | Contrato incluído |
+| --- | --- |
+| MCP | Python SDK `>=2.0,<3`, perfil `2026-07-28`, Streamable HTTP |
+| Auth interativa | Authorization Code + PKCE, callback loopback RFC 8252 e validação de issuer RFC 9207 |
+| Auth de máquina | Extensão draft MCP OAuth Client Credentials com `client_secret_basic` para OIDC genérico |
+| Providers | Microsoft Entra ID ou OIDC genérico compatível com padrões |
+| Segurança de rede | HTTPS por padrão, controles SSRF, DNS pinning, política de redirect e destino exato do bearer |
+| Tokens | Arquivo POSIX endurecido e opcional no modo interativo; credenciais/tokens de máquina em memória |
+| Observabilidade | Logs estruturados e tracing W3C apenas de metadados via `a2a-otel-kit` e HTTPX2 nativo |
+| Evidências | Quality gate travado, matrizes de compatibilidade, contrato do par e suíte E2E de 12 cenários |
 
-Alterne `MCP_CLIENT_AUTH_PROVIDER` entre `entra` e `generic` para trocar de adapter - nenhuma
-outra mudança de código é necessária. Veja `src/mcp_client_auth_template/adapters/` para as duas
-factories de provider e `tests/unit/test_*_client_auth.py` para como cada uma é testada offline
-(um token store fake em memória, sem rede, sem IdP real).
-
-Para jobs sem usuário, use `MCP_CLIENT_AUTH_MODE=client_credentials` com provider `generic`,
-configure o `MCP_CLIENT_CLIENT_CREDENTIALS_CLIENT_ID` pré-registrado e injete
-`MCP_CLIENT_CLIENT_CREDENTIALS_SECRET` por um secret manager no início do processo. Esse perfil usa
-`ClientCredentialsOAuthProvider` com `client_secret_basic`, anuncia
-`io.modelcontextprotocol/oauth-client-credentials`, não inicia browser/listener e mantém access
-tokens somente em memória. O perfil determinístico não reivindica interoperabilidade de client
-credentials com Entra: o contrato `{resource}/.default` e app roles do Entra é separado.
-
-## Fluxo de autenticação
-
-A troca interativa completa de authorization code + PKCE que este cliente conduz, de ponta a ponta:
+## Onde ele se encaixa
 
 ```mermaid
-sequenceDiagram
-    participant Client as Este cliente CLI
-    participant Browser as Browser do sistema
-    participant AS as Authorization server<br/>(Entra ID / OIDC genérico)
-    participant Server as Servidor de recursos MCP
-
-    Client->>Server: Chama uma tool, sem bearer token
-    Server-->>Client: 401 + WWW-Authenticate
-    Client->>Server: GET /.well-known/oauth-protected-resource
-    Server-->>Client: Protected Resource Metadata (aponta para o AS)
-    Client->>AS: Descobre metadados do AS + (CIMD ou DCR, só no genérico)
-    Client->>Browser: Abre a URL de autorização (PKCE challenge)
-    Browser->>AS: Usuário autentica e consente
-    AS-->>Client: Redirect pro servidor loopback com o code
-    Client->>AS: Troca code + verifier por tokens
-    AS-->>Client: Access + refresh tokens
-    Client->>Server: Chama a tool de novo, Authorization: Bearer <token>
-    Server-->>Client: 403 insufficient_scope para o health elevado
-    Client->>AS: Reautoriza com scopes anteriores + mcp:tools:health
-    AS-->>Client: Access token elevado
-    Client->>Server: SDK repete uma vez o health ainda não despachado
-    Server-->>Client: Resultado da tool
+flowchart LR
+    Actor["Pessoa ou serviço sem usuário"] --> Client["Este cliente MCP"]
+    Client -->|"OAuth 2.1"| AS["Entra ID ou authorization server OIDC"]
+    Client -->|"Bearer token + requisição MCP"| Server["Resource server MCP remoto"]
+    Client -.->|"traces de metadados (opt-in)"| OTLP["Coletor OTLP"]
 ```
 
-Veja `docs/ARCHITECTURE.md` para a divisão completa de camadas e as decisões transversais por trás
-desse fluxo.
+O authorization server controla autenticação e emissão de tokens. O servidor MCP remoto controla
+validação do token e autorização das tools. Este cliente controla as responsabilidades de
+integração entre os dois: discovery seguro, browser, callback, ciclo de vida do token, política de
+transporte e orquestração do cliente MCP.
+
+## Início rápido
+
+Pré-requisitos: Python 3.13 ou 3.14,
+[`uv`](https://docs.astral.sh/uv/getting-started/installation/) e um resource server MCP em execução.
+
+```bash
+git clone https://github.com/brunovicco/mcp-client-auth-template.git
+cd mcp-client-auth-template
+cp .env.example .env
+uv sync --frozen --all-groups
+uv run python -m mcp_client_auth_template.entrypoints.demo_client
+```
+
+Aponte `MCP_CLIENT_SERVER_URL` para o servidor MCP e configure o bloco do Entra ou do OIDC genérico
+no `.env`. No modo interativo padrão, a primeira execução abre o browser, aguarda o redirect
+loopback, troca o code com PKCE e chama `whoami` e `health`. Execuções seguintes podem reutilizar e
+renovar o token armazenado.
+
+Para rodar o par local completo, clone o
+[`mcp-server-auth-template`](https://github.com/brunovicco/mcp-server-auth-template) ao lado deste
+repositório e siga o [E2E entre repositórios](docs/E2E.md).
+
+## Modos de autenticação
+
+| Modo | Providers | Ciclo de vida da credencial | Uso indicado |
+| --- | --- | --- | --- |
+| `interactive` | Entra ID ou OIDC genérico | Browser + PKCE; arquivo opcional de token renovável | Ferramentas de desenvolvimento, apps nativos/desktop e CLIs de operador |
+| `client_credentials` | Perfil determinístico OIDC genérico | Secret injetado no startup; access tokens ficam em memória | CI, workers de backend e automações agendadas |
+
+Troque o provider com `MCP_CLIENT_AUTH_PROVIDER=entra` ou `generic`; troque o modo com
+`MCP_CLIENT_AUTH_MODE=interactive` ou `client_credentials`.
+
+Para jobs sem usuário, pré-registre o cliente confidencial, configure
+`MCP_CLIENT_CLIENT_CREDENTIALS_CLIENT_ID` e injete
+`MCP_CLIENT_CLIENT_CREDENTIALS_SECRET` por um secret manager. O modo máquina não abre browser,
+inicia callback, usa CIMD/DCR nem grava sua credencial ou access token em storage persistente.
+
+## O que o fluxo prova
+
+O E2E do par exercita cliente e servidor reais com um provider OIDC local e determinístico:
+
+```text
+Desafio MCP 401 -> Protected Resource Metadata -> OIDC discovery
+-> cliente público CIMD-first ou DCR retrocompatível
+-> authorization code + PKCE + validação de issuer RFC 9207
+-> token vinculado ao recurso -> chamada MCP autenticada
+-> desafio 403 de scope antes do dispatch -> um replay elevado -> sucesso
+```
+
+O perfil máquina prova separadamente anúncio da extensão, `client_secret_basic`, aquisição de token
+vinculado ao recurso, identidade de máquina e scopes progressivos sem browser ou token persistente.
+A matriz negativa cobre issuer/audience incorretos, expiração, scope insuficiente, credencial de
+máquina inválida, divergência de envelope, versão de protocolo não suportada e issuer incorreto na
+resposta de autorização.
+
+## Postura de segurança
+
+- Discovery OAuth e tráfego de tokens usam HTTPS por padrão e passam por controles de esquema,
+  redirect, compressão, tamanho de resposta, destino, respostas DNS e rebinding.
+- Credenciais bearer são enviadas apenas para a fronteira exata do recurso MCP configurado.
+- O callback loopback aceita endereços loopback literais, requisições limitadas, path exato e dados de
+  state/issuer OAuth validados.
+- Arquivos de token POSIX exigem ownership/permissões privadas, rejeitam symlinks/hardlinks, limitam
+  o tamanho de leitura e usam substituição atômica durável. Storage em memória também está disponível.
+- Client secrets usam `SecretStr`, ficam em memória e não aparecem em falhas estruturadas.
+- Logs e traces excluem credenciais, authorization codes, payloads MCP, bodies, headers/URLs
+  arbitrários, dados pessoais, baggage e texto de exceções.
+
+O armazenamento persistente de tokens é intencionalmente plaintext. Controles do sistema de arquivos
+reduzem a exposição local, mas não substituem um keyring do sistema operacional ou secrets manager.
+Leia [Privacidade e tratamento de dados](docs/PRIVACY.md) antes de escolher um adapter de storage.
+
+## Evidências de engenharia
+
+- quality gate determinístico com lint, format, Mypy estrito, arquitetura, testes, cobertura,
+  Bandit e auditoria de dependências;
+- Python 3.13/3.14 contra MCP SDK 2.0.0 e a versão 2.x compatível mais recente;
+- Entra/OIDC genérico em HTTPS de produção e perfis locais IPv4/IPv6 explicitamente habilitados;
+- E2E OAuth/MCP real de 12 cenários contra o servidor companheiro, incluindo casos fail-closed;
+- apenas identidades e chaves locais sintéticas: o CI normal não precisa de IdP real ou secret de
+  produção;
+- ADRs registram trade-offs de segurança, protocolo, storage, operações, compatibilidade e
+  observabilidade.
+
+## Observabilidade
+
+O `a2a-otel-kit` envolve o transporte HTTPX2 nativo do MCP SDK 2.x e injeta contexto W3C sem ler
+bodies de request ou response. O export é silencioso em rede, a menos que
+`A2A_OTEL_ENABLED=true` e um endpoint OTLP completo de traces sejam configurados. Veja a
+[política de observabilidade](docs/OBSERVABILITY.md).
+
+## Mapa da documentação
+
+| Documento | Quando usar |
+| --- | --- |
+| [Arquitetura](docs/ARCHITECTURE.md) | Contexto, camadas, ownership e sequência de autorização |
+| [Compatibilidade](docs/COMPATIBILITY.md) | Versões suportadas e contrato executável cliente/servidor |
+| [E2E entre repositórios](docs/E2E.md) | Happy paths, matriz fail-closed e execução local |
+| [Operações](docs/OPERATIONS.md) | Preflight, timeouts, shutdown, categorias de falha e containers |
+| [Privacidade](docs/PRIVACY.md) | Inventário de tokens, storage, retenção e processadores externos |
+| [Observabilidade](docs/OBSERVABILITY.md) | OpenTelemetry e política de exclusão de conteúdo |
+| [Desenvolvimento](docs/DEVELOPMENT.md) | Ambiente local, checks e workflow do container |
+| [Decisões de arquitetura](docs/adr/) | Justificativas e trade-offs das decisões materiais |
 
 ## Desenvolvimento
 
@@ -113,13 +179,17 @@ uv run pytest
 uv run python scripts/quality_gate.py
 ```
 
-Liste ou selecione checks do gate com `--list` e `--check NAME`. Veja `AGENTS.md` para os
-requisitos de build, lint, format, typecheck, test, security, architecture, MCP e conclusão, e
-`docs/DEVELOPMENT.md` para o build do container e o setup local.
+O quality gate é a definição de pronto. Use `--list` ou `--check NAME` para feedback local rápido
+e execute o gate completo antes de abrir um pull request.
 
-O Codex carrega o `.codex/config.toml`, `.codex/hooks.json` e `.agents/skills/` já versionados
-apenas dentro do contexto de projeto/confiança apropriado. Revise os hooks de lifecycle com
-`/hooks` antes de usar.
+## Escopo e adoção em produção
+
+Este repositório é um template de referência, não um cliente OAuth hospedado. Um produto concreto
+ainda deve definir registro de redirects, política de consentimento, entrega segura de secrets, um
+adapter de token storage para produção, ownership de TLS/proxy, apresentação de erros ao usuário,
+monitoramento e validação real com o IdP. O par determinístico não reivindica interoperabilidade de
+client credentials com Entra; o modelo `{resource}/.default` e app roles exige validação específica
+do provider.
 
 ## Licença
 

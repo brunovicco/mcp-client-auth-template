@@ -31,7 +31,6 @@ For `MCP_CLIENT_AUTH_MODE=client_credentials`, inject
 deployment-specific schedule. This mode does not open a redirect listener and overrides token-file
 storage with in-memory storage; restarting the process discards its acquired access token.
 
-
 ## Operational budgets and cancellation
 
 The shared HTTP client has distinct connect, read, write, and pool timeouts. MCP tool calls also
@@ -74,6 +73,6 @@ the failure object or logged. Successful `whoami` and `health` calls likewise em
 and completion event. Applications that need to display business payloads should render them on an
 explicit user-facing channel rather than placing them in operational logs.
 
-In interactive mode, the headless OAuth fallback still prints the authorization URL to the terminal because the operator
-must be able to copy it into a browser. That URL is no longer attached to the structured
-`browser_open_failed` log event.
+In interactive mode, the headless OAuth fallback still prints the authorization URL to the terminal
+because the operator must be able to copy it into a browser. That URL is no longer attached to the
+structured `browser_open_failed` log event.
