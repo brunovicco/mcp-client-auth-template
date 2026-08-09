@@ -1,7 +1,10 @@
 # mcp-client-auth-template
 
 [![quality](https://github.com/brunovicco/mcp-client-auth-template/actions/workflows/quality.yml/badge.svg)](https://github.com/brunovicco/mcp-client-auth-template/actions/workflows/quality.yml)
-![python](https://img.shields.io/badge/python-3.13-blue.svg)
+[![compatibility](https://github.com/brunovicco/mcp-client-auth-template/actions/workflows/compatibility.yml/badge.svg)](https://github.com/brunovicco/mcp-client-auth-template/actions/workflows/compatibility.yml)
+[![e2e](https://github.com/brunovicco/mcp-client-auth-template/actions/workflows/e2e.yml/badge.svg)](https://github.com/brunovicco/mcp-client-auth-template/actions/workflows/e2e.yml)
+[![release](https://img.shields.io/github/v/release/brunovicco/mcp-client-auth-template)](https://github.com/brunovicco/mcp-client-auth-template/releases)
+![python](https://img.shields.io/badge/python-3.13%20%7C%203.14-blue.svg)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 *[Leia em português](README.pt-BR.md)*
@@ -13,14 +16,26 @@ Targets the MCP **2026-07-28** specification. This is the client-side half of th
 [`mcp-server-auth-template`](https://github.com/brunovicco/mcp-server-auth-template); the two
 are meant to be run against each other, and each stands on its own as a starting point too.
 
-The official `mcp` SDK's `OAuthClientProvider` already implements PRM discovery, AS metadata
-discovery, PKCE, CIMD-first client registration with automatic Dynamic Client Registration
-fallback, token refresh, and RFC 9207 issuer validation. Entra ID also can't be registered
-dynamically (no DCR, no CIMD), so a real integration needs a pre-registered client either way.
-This template supplies exactly the pieces the SDK asks an embedding app to provide - token
-storage, opening a browser, and receiving the redirect - built once, correctly, so a new MCP
-client doesn't have to re-derive an RFC 8252 loopback server or Entra's pre-registration
-handling from scratch. See `docs/adr/0002-oauth21-native-client.md` for the full reasoning.
+The official MCP Python SDK's `OAuthClientProvider` handles Protected Resource Metadata and
+authorization-server discovery, PKCE, token refresh, RFC 9207 issuer validation, issuer-bound
+client credentials, Client ID Metadata Documents when advertised, and Dynamic Client Registration
+fallback where supported. MCP `2026-07-28` deprecates DCR in favor of Client ID Metadata Documents
+for new integrations. Entra mode therefore uses a pre-registered public client. This template
+supplies the embedding pieces the SDK asks for - token storage, opening a browser, receiving the
+redirect, and the Entra pre-registration adapter - without re-deriving those security boundaries
+in every client. See `docs/adr/0002-oauth21-native-client.md` for the full reasoning.
+
+## Compatibility
+
+Release `v0.2.0` supports Python **3.13 and 3.14**, MCP Python SDK **2.x**
+(`>=2.0,<3`), and the MCP **2026-07-28** reference profile. CI continuously exercises the SDK
+support floor (`2.0.0`) and the latest compatible 2.x, both auth providers, production HTTPS,
+explicit IPv4/IPv6 loopback development profiles, and a real OAuth/MCP E2E flow against the
+companion server.
+
+See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) for the executable support policy and its
+scope. Provider-specific live IdP interoperability is intentionally not claimed by the local
+deterministic matrix.
 
 ## Auth quick start
 
