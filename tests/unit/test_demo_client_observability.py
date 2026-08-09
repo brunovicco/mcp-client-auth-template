@@ -21,7 +21,7 @@ def test_build_observability_settings_defaults_to_disabled() -> None:
     settings = build_observability_settings()
 
     assert settings.service_name == "mcp-client-auth-template"
-    assert settings.service_version == "0.1.0"
+    assert settings.service_version == "0.3.0"
     assert settings.environment == "local"
     assert settings.enabled is False
     assert settings.otlp_endpoint is None
