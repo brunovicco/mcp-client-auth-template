@@ -1,7 +1,10 @@
 # mcp-client-auth-template
 
 [![quality](https://github.com/brunovicco/mcp-client-auth-template/actions/workflows/quality.yml/badge.svg)](https://github.com/brunovicco/mcp-client-auth-template/actions/workflows/quality.yml)
-![python](https://img.shields.io/badge/python-3.13-blue.svg)
+[![compatibility](https://github.com/brunovicco/mcp-client-auth-template/actions/workflows/compatibility.yml/badge.svg)](https://github.com/brunovicco/mcp-client-auth-template/actions/workflows/compatibility.yml)
+[![e2e](https://github.com/brunovicco/mcp-client-auth-template/actions/workflows/e2e.yml/badge.svg)](https://github.com/brunovicco/mcp-client-auth-template/actions/workflows/e2e.yml)
+[![release](https://img.shields.io/github/v/release/brunovicco/mcp-client-auth-template)](https://github.com/brunovicco/mcp-client-auth-template/releases)
+![python](https://img.shields.io/badge/python-3.13%20%7C%203.14-blue.svg)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 *[Read in English](README.md)*
@@ -13,15 +16,27 @@ MCP **2026-07-28**. Este é a metade cliente do padrão em
 [`mcp-server-auth-template`](https://github.com/brunovicco/mcp-server-auth-template); os dois são
 feitos pra rodar um contra o outro, mas cada um também se sustenta sozinho como ponto de partida.
 
-O `OAuthClientProvider` do SDK oficial já implementa descoberta de PRM, descoberta de metadados do
-AS, PKCE, registro de client CIMD-first com fallback automático pra Dynamic Client Registration,
-refresh de token e validação de issuer (RFC 9207). O Entra ID também não pode ser registrado
-dinamicamente (sem DCR, sem CIMD), então uma integração real precisa de um client pré-registrado de
-qualquer forma. Este template fornece exatamente as peças que o SDK espera que a aplicação
-forneça - armazenamento de token, abertura de browser e recebimento do redirect - construídas uma
-vez, corretamente, pra que um novo cliente MCP não precise redescobrir um servidor loopback RFC
-8252 ou o tratamento de pré-registro do Entra do zero. Veja `docs/adr/0002-oauth21-native-client.md`
-para o raciocínio completo.
+O `OAuthClientProvider` do MCP Python SDK oficial trata descoberta de Protected Resource Metadata
+e do authorization server, PKCE, refresh de token, validação de issuer RFC 9207, credenciais
+vinculadas ao issuer, Client ID Metadata Documents quando anunciados e fallback para Dynamic
+Client Registration onde suportado. O MCP `2026-07-28` deprecia DCR em favor de Client ID Metadata
+Documents para novas integrações. O modo Entra, portanto, usa um cliente público pré-registrado.
+Este template fornece as peças que a aplicação precisa embutir - armazenamento de token, abertura
+do browser, recebimento do redirect e o adapter de pré-registro do Entra - sem redescobrir essas
+fronteiras de segurança em cada cliente. Veja `docs/adr/0002-oauth21-native-client.md` para o
+raciocínio completo.
+
+## Compatibilidade
+
+A release `v0.2.0` suporta Python **3.13 e 3.14**, MCP Python SDK **2.x**
+(`>=2.0,<3`) e o perfil de referência MCP **2026-07-28**. O CI exercita continuamente o piso do
+SDK (`2.0.0`) e o 2.x compatível mais recente, os dois providers de autenticação, HTTPS de
+produção, perfis locais IPv4/IPv6 explicitamente habilitados e um E2E OAuth/MCP real contra o
+servidor companheiro.
+
+Veja [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) para a política executável de suporte e seu
+escopo. Interoperabilidade ao vivo com IdPs específicos não é reivindicada pela matriz local
+determinística.
 
 ## Início rápido (auth)
 
