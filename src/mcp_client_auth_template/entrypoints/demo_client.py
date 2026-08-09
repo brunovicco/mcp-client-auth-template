@@ -4,10 +4,12 @@ Run against the server template (``mcp-server-auth-template``) with:
 
     uv run python -m mcp_client_auth_template.entrypoints.demo_client
 
-The first run opens a browser for the authorization code flow; if
+Interactive mode opens a browser for the authorization code flow on its first run; if
 ``MCP_CLIENT_TOKEN_STORAGE_PATH`` resolves to a real path (the default,
 ``~/.mcp-client-auth-template/tokens.json``), later runs reuse the stored
 token and refresh it silently instead of prompting again.
+
+Client-credentials mode is non-interactive and keeps acquired tokens in memory.
 """
 
 from collections.abc import Awaitable, Callable
@@ -21,13 +23,17 @@ import structlog
 from a2a_otel_kit.adapters.mcp import TracingAsyncTransport
 from a2a_otel_kit.application.settings import ObservabilitySettings
 from a2a_otel_kit.entrypoints.observability import Observability
-from mcp.client import Client
+from mcp.client import Client, advertise
 from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.auth import AuthorizationCodeResult
 from mcp.types import CallToolResult
 
 from mcp_client_auth_template.adapters.browser_redirect import open_system_browser
+from mcp_client_auth_template.adapters.client_credentials_auth import (
+    OAUTH_CLIENT_CREDENTIALS_EXTENSION_ID,
+    build_client_credentials_oauth_provider,
+)
 from mcp_client_auth_template.adapters.entra_client_auth import build_entra_oauth_provider
 from mcp_client_auth_template.adapters.generic_oidc_client_auth import build_generic_oauth_provider
 from mcp_client_auth_template.adapters.loopback_callback_server import LoopbackCallbackServer
@@ -109,15 +115,31 @@ async def build_oauth_provider(
     settings: Settings,
     *,
     storage: TokenStorage,
-    redirect_handler: Callable[[str], Awaitable[None]],
-    callback_handler: Callable[[], Awaitable[AuthorizationCodeResult]],
+    redirect_handler: Callable[[str], Awaitable[None]] | None = None,
+    callback_handler: Callable[[], Awaitable[AuthorizationCodeResult]] | None = None,
 ) -> OAuthClientProvider:
-    """Return the adapter matching ``settings.auth_provider``.
+    """Return the adapter matching ``settings.auth_mode`` and ``auth_provider``.
 
     ``Settings._finalize`` already enforces that ``entra_tenant_id``/``entra_client_id`` are set
     when ``auth_provider="entra"``; the ``cast`` calls below are type narrowing for mypy, not a
     second validation pass.
     """
+    if settings.auth_mode == "client_credentials":
+        client_id = cast(str, settings.client_credentials_client_id)
+        secret = settings.client_credentials_secret
+        if secret is None:  # pragma: no cover - Settings validates this invariant
+            raise RuntimeError("client credentials settings were not validated")
+        return build_client_credentials_oauth_provider(
+            server_url=settings.server_url,
+            storage=storage,
+            client_id=client_id,
+            client_secret=secret.get_secret_value(),
+            scope=settings.scope,
+        )
+
+    if redirect_handler is None or callback_handler is None:
+        raise ValueError("interactive auth requires redirect and callback handlers")
+
     if settings.auth_provider == "entra":
         return await build_entra_oauth_provider(
             server_url=settings.server_url,
@@ -192,7 +214,10 @@ def build_mcp_client(settings: Settings, *, http_client: httpx2.AsyncClient) -> 
         f"{settings.server_url.rstrip('/')}/mcp",
         http_client=http_client,
     )
-    return Client(transport, mode="auto")
+    extensions = None
+    if settings.auth_mode == "client_credentials":
+        extensions = [advertise(OAUTH_CLIENT_CREDENTIALS_EXTENSION_ID)]
+    return Client(transport, mode="auto", extensions=extensions)
 
 
 async def run_demo() -> None:
@@ -203,22 +228,24 @@ async def run_demo() -> None:
     try:
         storage = build_token_storage(settings)
         network_policy = build_oauth_network_policy(settings)
-        loopback = LoopbackCallbackServer(
-            host=settings.redirect_host,
-            port=settings.redirect_port,
-            path=settings.redirect_path,
-            timeout_seconds=settings.oauth_callback_timeout_seconds,
-            max_requests=settings.oauth_callback_max_requests,
-        )
-
-        oauth_provider = await build_oauth_provider(
-            settings,
-            storage=storage,
-            redirect_handler=network_policy.wrap_browser_redirect(
-                loopback.wrap_redirect_handler(open_system_browser)
-            ),
-            callback_handler=loopback.wait_for_callback,
-        )
+        if settings.auth_mode == "interactive":
+            loopback = LoopbackCallbackServer(
+                host=settings.redirect_host,
+                port=settings.redirect_port,
+                path=settings.redirect_path,
+                timeout_seconds=settings.oauth_callback_timeout_seconds,
+                max_requests=settings.oauth_callback_max_requests,
+            )
+            oauth_provider = await build_oauth_provider(
+                settings,
+                storage=storage,
+                redirect_handler=network_policy.wrap_browser_redirect(
+                    loopback.wrap_redirect_handler(open_system_browser)
+                ),
+                callback_handler=loopback.wait_for_callback,
+            )
+        else:
+            oauth_provider = await build_oauth_provider(settings, storage=storage)
 
         # Tracing remains the outer transport so spans keep the logical hostname. The security
         # transport underneath resolves and pins the actual connect IP without exposing that

@@ -2,7 +2,7 @@
 
 ## Configuration preflight
 
-Run the network-silent preflight before starting an interactive production client:
+Run the network-silent preflight before starting a production client:
 
 ```bash
 uv run python -m mcp_client_auth_template.entrypoints.preflight --json
@@ -20,11 +20,16 @@ availability.
 Set `APP_ENV=production`, use a real HTTPS MCP resource URL, keep
 `MCP_CLIENT_OAUTH_ALLOW_INSECURE_LOOPBACK=false`, use tenant-specific Entra UUIDs, and replace all
 `.invalid`/example placeholders. The redirect listener remains an IP-literal loopback address even
-in production because this repository models an interactive native client.
+in production for interactive mode.
 
 Local file token storage remains single-user POSIX storage with the ownership and mode invariants
 documented in ADR-0007. Use an OS keyring or secret-manager adapter instead when that filesystem
 contract is not appropriate.
+
+For `MCP_CLIENT_AUTH_MODE=client_credentials`, inject
+`MCP_CLIENT_CLIENT_CREDENTIALS_SECRET` at process start from a secret manager and rotate it on a
+deployment-specific schedule. This mode does not open a redirect listener and overrides token-file
+storage with in-memory storage; restarting the process discards its acquired access token.
 
 
 ## Operational budgets and cancellation
@@ -44,7 +49,7 @@ not wait forever on a stuck connection pool or transport close.
 
 ## Stable failure contract
 
-The interactive entrypoint converts expected operational failures into stable exit codes without
+The entrypoint converts expected operational failures into stable exit codes without
 logging exception messages, response bodies, OAuth parameters, tokens, or tool result content:
 
 | Exit | Category | Examples |
@@ -69,6 +74,6 @@ the failure object or logged. Successful `whoami` and `health` calls likewise em
 and completion event. Applications that need to display business payloads should render them on an
 explicit user-facing channel rather than placing them in operational logs.
 
-The headless OAuth fallback still prints the authorization URL to the terminal because the operator
+In interactive mode, the headless OAuth fallback still prints the authorization URL to the terminal because the operator
 must be able to copy it into a browser. That URL is no longer attached to the structured
 `browser_open_failed` log event.

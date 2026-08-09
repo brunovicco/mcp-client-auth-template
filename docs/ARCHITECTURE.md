@@ -2,8 +2,8 @@
 
 ## Context
 
-This service is a reusable template for a native MCP client: it authenticates against an
-OAuth 2.1 authorization server (RFC 8252 native-app flow) and then talks to an MCP resource
+This service is a reusable template for an interactive native or non-interactive service MCP
+client: it authenticates against an OAuth 2.1 authorization server and then talks to an MCP resource
 server over the streamable-HTTP transport. See `docs/adr/0002-oauth21-native-client.md` for
 why token issuance, discovery, PKCE, and registration are the SDK's responsibility, not this
 repository's.
@@ -16,9 +16,10 @@ repository's.
   `MCP_CLIENT_SERVER_URL` - the companion repository,
   [`mcp-server-auth-template`](https://github.com/brunovicco/mcp-server-auth-template), is
   that server, and its `whoami`/`health` tools are what the demo entrypoint calls.
-- **Local dependency**: a loopback socket (`adapters/loopback_callback_server.py`) that
-  receives the authorization redirect, and optionally a local JSON file
-  (`adapters/token_storage.py`) that persists tokens between runs.
+- **Local dependency**: interactive mode uses a loopback socket
+  (`adapters/loopback_callback_server.py`) and may use a local JSON token file. Client-credentials
+  mode uses neither: its fixed credential is injected at process start and access tokens remain in
+  memory.
 
 ## Layers
 
@@ -77,7 +78,7 @@ domain      -> no outer layer
 
 ## Diagrams
 
-Native-client authorization flow (the only critical flow this service owns; the
+Interactive native-client authorization flow (one of the critical flows this service owns; the
 authorization server's own login/consent UI is out of scope):
 
 ```mermaid
@@ -98,5 +99,18 @@ sequenceDiagram
     Client->>AS: Exchange code + verifier for tokens
     AS-->>Client: Access + refresh tokens
     Client->>Server: Call the tool again, Authorization: Bearer <token>
+    alt Tool needs an additional scope
+        Server-->>Client: 403 insufficient_scope before dispatch
+        Client->>AS: Reauthorize with prior + challenged scopes
+        AS-->>Client: Elevated access token
+        Client->>Server: SDK retries the undispatched request once
+    end
     Server-->>Client: Tool result
 ```
+
+The non-interactive generic-OIDC path follows the same PRM and authorization-server discovery, but
+uses a pre-registered client ID plus `client_secret_basic` at the token endpoint. It declares the
+draft `io.modelcontextprotocol/oauth-client-credentials` capability on every MCP request, performs
+no redirect/CIMD/DCR, and lets the SDK reacquire a token with the prior-plus-challenged scope union
+after a pre-dispatch 403. Generic tokens retain their verified `client_id`/`subject`, but are not
+promoted to Entra-style application principals or app roles.

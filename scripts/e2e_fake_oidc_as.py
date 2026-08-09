@@ -24,7 +24,14 @@ _AUTHORIZATION_CODES: dict[str, dict[str, str]] = {}
 _REGISTRATION_COUNT = 0
 _AUTHORIZATION_COUNT = 0
 _TOKEN_EXCHANGE_COUNT = 0
+_AUTHORIZATION_SCOPES: list[str] = []
+_CLIENT_CREDENTIALS_EXCHANGE_COUNT = 0
+_CLIENT_CREDENTIALS_SCOPES: list[str] = []
 _AUTHORIZATION_RESPONSE_ISSUER_OVERRIDE: str | None = None
+_CLIENT_ID_METADATA_DOCUMENT_SUPPORTED = False
+_CIMD_CLIENT_ID = "https://client.example.invalid/oauth/client-metadata.json"
+_MACHINE_CLIENT_ID = "mcp-e2e-machine"
+_MACHINE_CLIENT_CREDENTIAL = "e2e-test-credential"
 
 
 def _b64url_uint(value: int) -> str:
@@ -50,6 +57,22 @@ def _form_values(body: bytes) -> dict[str, str]:
     """Decode an application/x-www-form-urlencoded body to single values."""
     values = parse_qs(body.decode("utf-8"), keep_blank_values=True)
     return {key: items[-1] for key, items in values.items() if items}
+
+
+def _basic_credentials(request: Request) -> tuple[str, str] | None:
+    """Decode an HTTP Basic client credential without retaining or logging it."""
+    authorization = request.headers.get("authorization", "")
+    scheme, _, encoded = authorization.partition(" ")
+    if scheme.lower() != "basic" or not encoded:
+        return None
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    client_id, separator, client_secret = decoded.partition(":")
+    if not separator:
+        return None
+    return client_id, client_secret
 
 
 def _pkce_challenge(verifier: str) -> str:
@@ -91,12 +114,17 @@ async def metadata(_: Request) -> Response:
             "token_endpoint": f"{_ISSUER}/token",
             "jwks_uri": f"{_ISSUER}/jwks",
             "registration_endpoint": f"{_ISSUER}/register",
-            "scopes_supported": ["mcp:tools:call", "mcp:tools:list"],
+            "scopes_supported": [
+                "mcp:tools:call",
+                "mcp:tools:health",
+                "mcp:tools:list",
+            ],
             "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code"],
-            "token_endpoint_auth_methods_supported": ["none"],
+            "grant_types_supported": ["authorization_code", "client_credentials"],
+            "token_endpoint_auth_methods_supported": ["none", "client_secret_basic"],
             "code_challenge_methods_supported": ["S256"],
             "authorization_response_iss_parameter_supported": True,
+            "client_id_metadata_document_supported": _CLIENT_ID_METADATA_DOCUMENT_SUPPORTED,
         }
     )
 
@@ -109,6 +137,9 @@ async def jwks(_: Request) -> Response:
 async def register(request: Request) -> Response:
     """Implement enough RFC 7591 DCR for the generic MCP client path."""
     global _REGISTRATION_COUNT
+    if _CLIENT_ID_METADATA_DOCUMENT_SUPPORTED:
+        return JSONResponse({"error": "invalid_client_metadata"}, status_code=400)
+
     payload = await request.json()
     if not isinstance(payload, dict):
         return JSONResponse({"error": "invalid_client_metadata"}, status_code=400)
@@ -144,16 +175,20 @@ async def authorize(request: Request) -> Response:
         )
     if query.get("code_challenge_method") != "S256":
         return JSONResponse({"error": "invalid_request"}, status_code=400)
+    if _CLIENT_ID_METADATA_DOCUMENT_SUPPORTED and query.get("client_id") != _CIMD_CLIENT_ID:
+        return JSONResponse({"error": "invalid_client"}, status_code=400)
 
+    requested_scope = query.get("scope", "")
     code = secrets.token_urlsafe(24)
     _AUTHORIZATION_CODES[code] = {
         "client_id": query["client_id"],
         "redirect_uri": query["redirect_uri"],
         "code_challenge": query["code_challenge"],
         "resource": query.get("resource", ""),
-        "scope": query.get("scope", ""),
+        "scope": requested_scope,
     }
     _AUTHORIZATION_COUNT += 1
+    _AUTHORIZATION_SCOPES.append(requested_scope)
     callback_issuer = _AUTHORIZATION_RESPONSE_ISSUER_OVERRIDE or _ISSUER
     callback_query = urlencode({"code": code, "state": query["state"], "iss": callback_issuer})
     separator = "&" if "?" in query["redirect_uri"] else "?"
@@ -161,10 +196,46 @@ async def authorize(request: Request) -> Response:
 
 
 async def token(request: Request) -> Response:
-    """Exchange an authorization code for a resource-bound JWT access token."""
-    global _TOKEN_EXCHANGE_COUNT
+    """Issue a resource-bound JWT for an authorization code or fixed machine credential."""
+    global _CLIENT_CREDENTIALS_EXCHANGE_COUNT, _TOKEN_EXCHANGE_COUNT
     form = _form_values(await request.body())
-    if form.get("grant_type") != "authorization_code":
+    grant_type = form.get("grant_type")
+    if grant_type == "client_credentials":
+        credentials = _basic_credentials(request)
+        if credentials is None:
+            return JSONResponse({"error": "invalid_client"}, status_code=401)
+        client_id, client_secret = credentials
+        if not (
+            secrets.compare_digest(client_id, _MACHINE_CLIENT_ID)
+            and secrets.compare_digest(client_secret, _MACHINE_CLIENT_CREDENTIAL)
+        ):
+            return JSONResponse({"error": "invalid_client"}, status_code=401)
+
+        resource = form.get("resource", "")
+        if not resource:
+            return JSONResponse({"error": "invalid_target"}, status_code=400)
+        requested_scope = form.get("scope", "")
+        _TOKEN_EXCHANGE_COUNT += 1
+        _CLIENT_CREDENTIALS_EXCHANGE_COUNT += 1
+        _CLIENT_CREDENTIALS_SCOPES.append(requested_scope)
+        access_token = _sign_access_token(
+            issuer=_ISSUER,
+            audience=resource,
+            scope=requested_scope or None,
+            expires_in=300,
+            client_id=client_id,
+            subject=client_id,
+        )
+        return JSONResponse(
+            {
+                "access_token": access_token,
+                "token_type": "Bearer",
+                "expires_in": 300,
+                "scope": requested_scope or None,
+            }
+        )
+
+    if grant_type != "authorization_code":
         return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
 
     code = form.get("code")
@@ -208,7 +279,7 @@ async def token(request: Request) -> Response:
 
 async def configure(request: Request) -> Response:
     """Adjust negative-test behavior without restarting the local fake AS."""
-    global _AUTHORIZATION_RESPONSE_ISSUER_OVERRIDE
+    global _AUTHORIZATION_RESPONSE_ISSUER_OVERRIDE, _CLIENT_ID_METADATA_DOCUMENT_SUPPORTED
     payload = await request.json()
     if not isinstance(payload, dict):
         return JSONResponse({"error": "invalid_request"}, status_code=400)
@@ -216,6 +287,12 @@ async def configure(request: Request) -> Response:
     if issuer is not None and not isinstance(issuer, str):
         return JSONResponse({"error": "invalid_request"}, status_code=400)
     _AUTHORIZATION_RESPONSE_ISSUER_OVERRIDE = issuer
+
+    if "client_id_metadata_document_supported" in payload:
+        cimd_supported = payload["client_id_metadata_document_supported"]
+        if not isinstance(cimd_supported, bool):
+            return JSONResponse({"error": "invalid_request"}, status_code=400)
+        _CLIENT_ID_METADATA_DOCUMENT_SUPPORTED = cimd_supported
     return JSONResponse({"ok": True})
 
 
@@ -255,6 +332,9 @@ async def state(_: Request) -> Response:
             "registrations": _REGISTRATION_COUNT,
             "authorizations": _AUTHORIZATION_COUNT,
             "token_exchanges": _TOKEN_EXCHANGE_COUNT,
+            "authorization_scopes": list(_AUTHORIZATION_SCOPES),
+            "client_credentials_exchanges": _CLIENT_CREDENTIALS_EXCHANGE_COUNT,
+            "client_credentials_scopes": list(_CLIENT_CREDENTIALS_SCOPES),
         }
     )
 

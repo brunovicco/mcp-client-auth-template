@@ -3,6 +3,9 @@
 - Status: Accepted
 - Date: 2026-08-08
 
+> Decision 6 is superseded by ADR-0018 for the generic-OIDC client-credentials mode. Entra remains
+> an interactive public-client profile in this repository.
+
 ## Context
 
 The demo is a native/CLI application using a system browser and loopback redirect.
