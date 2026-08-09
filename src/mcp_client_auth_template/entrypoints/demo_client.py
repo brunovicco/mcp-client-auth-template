@@ -17,7 +17,6 @@ from contextlib import AsyncExitStack
 from typing import cast
 
 import anyio
-import httpx
 import httpx2
 import structlog
 from a2a_otel_kit.adapters.mcp import TracingAsyncTransport
@@ -92,10 +91,7 @@ def build_secure_http_transport(
         transport_factory=transport_factory,
         max_hosts=settings.oauth_max_hosts,
     )
-    traced = TracingAsyncTransport.wrap(
-        cast(httpx.AsyncBaseTransport, secure_transport), observability
-    )
-    return cast(httpx2.AsyncBaseTransport, traced)
+    return TracingAsyncTransport.wrap(secure_transport, observability)
 
 
 def build_observability_settings() -> ObservabilitySettings:

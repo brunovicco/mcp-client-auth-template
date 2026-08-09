@@ -10,14 +10,10 @@ dependencies = [
     "structlog>=25.1",
     "mcp>=2.0,<3",
     "anyio>=4.8",
-    # Observability: see docs/OBSERVABILITY.md and docs/adr/0003-observability-via-a2a-otel-kit.md.
+    # Observability: see docs/OBSERVABILITY.md and docs/adr/0019-native-mcp-v2-observability.md.
     # Network-silent by default (ObservabilitySettings.enabled=False); a core dependency because
     # demo_client.py wires it into its actual request path, not optional scaffolding.
-    "a2a-otel-kit>=0.4.2,<0.5",
-    # Plain httpx (distinct from the mcp SDK's vendored httpx2 fork): required only because
-    # a2a_otel_kit.adapters.mcp imports it directly. See the ADR for why a2a-otel-kit's own `mcp`
-    # extra can't be used here (it pins mcp<2.0, conflicting with this project's mcp>=2.0,<3).
-    "httpx>=0.27",
+    "a2a-otel-kit[mcp]>=0.6,<0.7",
 ]
 
 [dependency-groups]

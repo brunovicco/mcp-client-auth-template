@@ -68,8 +68,9 @@ domain      -> no outer layer
 - Logging: structured events to stdout/stderr.
 - Tracing: `a2a-otel-kit`'s `Observability` facade exports trace data over OTLP HTTP/protobuf only
   when `A2A_OTEL_ENABLED=true` is configured. It propagates W3C Trace Context, but not baggage,
-  and `entrypoints/demo_client.py::run_demo()` owns its lifecycle at the composition-root
-  boundary. See `docs/OBSERVABILITY.md` and `docs/adr/0003-observability-via-a2a-otel-kit.md`.
+  through a native MCP SDK 2.x/HTTPX2 transport adapter, and
+  `entrypoints/demo_client.py::run_demo()` owns its lifecycle at the composition-root boundary.
+  See `docs/OBSERVABILITY.md` and `docs/adr/0019-native-mcp-v2-observability.md`.
 - Errors: infrastructure errors translated at adapters; external errors mapped at entrypoints.
 - Time: UTC internally with timezone-aware values.
 - Money: `Decimal` wrapped in a domain Value Object.
