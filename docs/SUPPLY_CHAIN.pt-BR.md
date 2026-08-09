@@ -1,7 +1,7 @@
 # Baseline de confiança da supply chain
 
-Este documento define os controles P1.6a para confiança em dependências e CI. Ele é uma política
-do projeto e apoio para revisão, não uma certificação. Geração de SBOM, attestations de artefatos,
+Este documento define os controles P1.6 para confiança em dependências, CI e inventário de software.
+Ele é uma política do projeto e apoio para revisão, não uma certificação. Attestations de artefatos,
 assinatura de releases e provenance de containers ficam, de forma intencional, para os próximos
 incrementos da P1.6.
 
@@ -54,6 +54,31 @@ secrets, tokens, dados pessoais ou detalhes privados de advisories.
 Administradores devem manter dependency graph, alertas do Dependabot e security updates do
 Dependabot habilitados. Essas configurações complementam os version updates definidos em
 `.github/dependabot.yml`.
+
+## Evidências de SBOM e vulnerabilidades (P1.6b)
+
+O workflow `supply-chain-evidence` cria dois inventários CycloneDX JSON com Syft: uma visão do código
+a partir do `uv.lock` commitado, incluindo o grafo declarado, e uma visão de runtime da imagem final,
+incluindo pacotes Python e do sistema operacional instalados. Grype registra o relatório completo
+de vulnerabilidades da imagem e reprova o workflow para achados high ou critical que tenham correção
+disponível. Achados sem correção continuam visíveis no artifact completo.
+
+O gate avalia o mesmo relatório salvo contra `security/vulnerability-exceptions.json`. Uma exceção
+precisa corresponder exatamente ao namespace do advisory, tipo de pacote e versão instalada;
+identificar owner, data de revisão, expiração, justificativa e plano de remoção; e durar no máximo
+90 dias. Exceções expiradas, obsoletas, duplicadas ou incompatíveis com uma nova versão falham de
+forma fechada. As exceções atuais do CPython existem apenas porque o Grype lista correções fora das
+linhas estáveis suportadas, expiram em 2026-09-30 e continuam no relatório completo. A
+[ADR-0020](adr/0020-actionable-vulnerability-exceptions.md) registra a decisão e o follow-up.
+
+Syft e Grype são baixados apenas de URLs de releases imutáveis e exatas. Versões e checksums SHA-256
+por plataforma ficam commitados em `scripts/install_security_tools.sh`; qualquer divergência impede
+a execução dos binários. O artifact é retido por 14 dias e contém os dois SBOMs, o relatório Grype
+completo e o resultado minimizado da política. Ele não contém credenciais, conteúdo de código,
+dados de requisição, tokens, prompts ou payloads MCP.
+
+Nesta etapa, a evidência permanece como artifact do Actions. Publicar SBOMs em releases, vinculá-los
+a digests imutáveis de imagens e adicionar attestations pertence à P1.6c/P1.6d.
 
 ## Evidência executável
 
