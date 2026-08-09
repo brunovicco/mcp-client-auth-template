@@ -17,7 +17,13 @@ PERMISSION_ENTRY = re.compile(r"^(?P<name>[a-z-]+):\s*(?P<access>read|write|none
 REQUIRED_FILES = (
     Path(".github/dependabot.yml"),
     Path(".github/workflows/dependency-review.yml"),
+    Path(".github/workflows/sbom.yml"),
+    Path("docs/adr/0020-actionable-vulnerability-exceptions.md"),
     Path("docs/SUPPLY_CHAIN.md"),
+    Path("scripts/enforce_vulnerability_policy.py"),
+    Path("scripts/install_security_tools.sh"),
+    Path("scripts/validate_security_evidence.py"),
+    Path("security/vulnerability-exceptions.json"),
 )
 REQUIRED_DENIED_LICENSES = (
     "AGPL-3.0-only",
@@ -129,7 +135,7 @@ def validate_workflow(path: Path, *, root: Path | None = None) -> list[str]:
 def _validate_baseline_configuration(root: Path) -> list[str]:
     """Validate required policy and automation configuration."""
     errors = [
-        f"{path.as_posix()}: required P1.6a baseline file is missing"
+        f"{path.as_posix()}: required supply-chain control file is missing"
         for path in REQUIRED_FILES
         if not (root / path).is_file()
     ]
@@ -161,6 +167,34 @@ def _validate_baseline_configuration(root: Path) -> list[str]:
         for license_id in REQUIRED_DENIED_LICENSES:
             if license_id not in text:
                 errors.append(f"dependency-review.yml: denied license is missing: {license_id}")
+
+    evidence_path = root / ".github/workflows/sbom.yml"
+    if evidence_path.is_file():
+        text = evidence_path.read_text(encoding="utf-8")
+        required_evidence = {
+            "source CycloneDX SBOM": "source.cdx.json",
+            "image CycloneDX SBOM": "image.cdx.json",
+            "complete vulnerability report": "grype.json",
+            "evidence contract validation": "validate_security_evidence.py",
+            "actionable vulnerability policy": "enforce_vulnerability_policy.py",
+            "reviewed vulnerability exceptions": "vulnerability-exceptions.json",
+            "policy decision evidence": "policy.json",
+            "explicit source identity": "--source-name",
+            "artifact upload": "actions/upload-artifact@",
+        }
+        for control, marker in required_evidence.items():
+            if marker not in text:
+                errors.append(f"sbom.yml: missing {control}")
+
+    installer_path = root / "scripts/install_security_tools.sh"
+    if installer_path.is_file():
+        text = installer_path.read_text(encoding="utf-8")
+        for marker in ('SYFT_VERSION="1.50.0"', 'GRYPE_VERSION="0.116.1"'):
+            if marker not in text:
+                errors.append(f"install_security_tools.sh: missing pinned marker {marker}")
+        checksums = re.findall(r'checksum="([0-9a-f]{64})"', text)
+        if len(checksums) != 8 or len(set(checksums)) != 8:
+            errors.append("install_security_tools.sh: expected eight unique platform checksums")
     return errors
 
 
