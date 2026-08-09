@@ -10,7 +10,7 @@ incrementos da P1.6.
 | Ameaça | Controle P1.6a | Risco residual |
 | --- | --- | --- |
 | Uma GitHub Action mutável ou comprometida executa no CI | Toda action de terceiros usa o SHA completo do commit; o quality gate rejeita referências mutáveis | Um commit confiável e fixado ainda pode conter defeito ou comprometimento |
-| O token do workflow tem autoridade maior que a necessária | Todo workflow declara permissões explícitas; o validador P1.6a rejeita escrita | A confiança no runner hospedado e na plataforma permanece |
+| O token do workflow tem autoridade maior que a necessária | Todo workflow declara permissões explícitas; escritas ficam limitadas ao job isolado de provenance acionado por tag | A confiança no runner, no OIDC do GitHub e na plataforma permanece |
 | Uma dependência vulnerável entra em uma atualização rotineira | Dependency Review bloqueia advisories high/critical novos reconhecidos; `pip-audit` verifica o ambiente travado | A cobertura do ecossistema e a base de advisories podem atrasar uma divulgação recente |
 | Dependências ficam desatualizadas | Dependabot verifica Python/uv e GitHub Actions semanalmente com volume limitado de PRs | Maintainers ainda precisam revisar e integrar updates seguros |
 | Uma dependência cria obrigações de licença incompatíveis | Dependency Review nega novos pacotes AGPL-3.0-only e GPL-3.0-only; toda licença nova é revisada | A detecção automática de licença pode ser incompleta ou incorreta |
@@ -34,8 +34,10 @@ dados desconhecidos ou ambíguos precisam ser resolvidos antes do merge.
 - Fixe actions remotas e workflows reutilizáveis no SHA completo de 40 caracteres, mantenha um
   comentário da release e desabilite a persistência das credenciais do checkout.
 - Fixe actions em container pelo digest SHA-256. Actions locais podem usar path relativo.
-- Mantenha as permissões dos workflows somente leitura na P1.6a. Escrita futura exige job isolado,
-  atualização documentada do threat model e mudança da política executável no mesmo PR.
+- Mantenha os workflows somente leitura por padrão. Apenas o job de provenance acionado por tag
+  pode solicitar escrita em `id-token`, `attestations` e `artifact-metadata`; ele não pode escrever
+  em contents, packages, releases ou registries. Qualquer nova escrita exige atualização documentada
+  do threat model e mudança da política executável no mesmo PR.
 - Não exponha secrets do repositório a código não confiável de pull requests. Updates de supply
   chain não recebem auto-merge.
 - Revise update de action como código executável: valide a release upstream e o intervalo de
@@ -77,8 +79,43 @@ a execução dos binários. O artifact é retido por 14 dias e contém os dois S
 completo e o resultado minimizado da política. Ele não contém credenciais, conteúdo de código,
 dados de requisição, tokens, prompts ou payloads MCP.
 
-Nesta etapa, a evidência permanece como artifact do Actions. Publicar SBOMs em releases, vinculá-los
-a digests imutáveis de imagens e adicionar attestations pertence à P1.6c/P1.6d.
+A evidência da P1.6b permanece como artifact do Actions. A P1.6c adiciona build provenance dos
+pacotes; publicar SBOMs em releases e vinculá-los a digests imutáveis de imagens continua como
+trabalho da P1.6d.
+
+## Artifacts de release reproduzíveis e provenance (P1.6c)
+
+O workflow `release-artifact-provenance` executa somente após o push de uma tag `v*`. Ele exige que
+a tag corresponda à versão em `pyproject.toml`, cria wheel e source distribution duas vezes com
+`SOURCE_DATE_EPOCH` derivado do commit e exige igualdade byte a byte entre os dois conjuntos. O
+validador de release verifica paths dos archives, metadata do pacote, nomes esperados e uma fronteira
+estrita de conteúdo antes de copiar os artifacts e gerar `SHA256SUMS`.
+
+O backend Hatchling fica fixado de forma exata em `pyproject.toml`; seu ambiente transitivo e
+isolado de build fica fixado em `build-constraints.txt` e é passado às duas execuções de
+`uv build`. Assim, uma resolução futura do backend/dependências não altera silenciosamente os
+bytes da mesma tag.
+
+A seleção padrão de sdist do Hatch pode incluir qualquer arquivo não ignorado pelo VCS local. A
+configuração explícita `only-include` impede que configuração local de assistants, worktrees,
+credenciais e automação não relacionada entrem no source release. O validador do archive aplica a
+mesma fronteira de forma independente, portanto drift de configuração falha de forma fechada.
+
+Depois da validação, os subjects SHA-256 recebem attestations de build provenance GitHub/Sigstore
+por uma `actions/attest` fixada por SHA. O job isolado pode emitir identidade OIDC e escrever
+attestations e metadata de artifacts, mas não pode escrever em contents, packages, releases ou
+registries. Wheel, sdist e manifesto de checksums permanecem como artifact do workflow por 30 dias.
+Valide arquivos baixados com:
+
+```bash
+sha256sum --check SHA256SUMS
+gh attestation verify mcp_client_auth_template-<versao>-py3-none-any.whl \
+  --repo brunovicco/mcp-client-auth-template
+```
+
+A P1.6c não cria nem altera uma GitHub Release. Publicar esses arquivos como release assets,
+adicionar attestations de SBOM e publicar imagem de container imutável por digest continuam como
+trabalho da P1.6d.
 
 ## Evidência executável
 

@@ -90,6 +90,31 @@ jobs:
     assert any("contents: write" in error for error in errors)
 
 
+def test_release_workflow_allows_only_attestation_write_permissions(tmp_path: Path) -> None:
+    path = tmp_path / ".github/workflows/release-artifacts.yml"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        """name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  attest:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps: []
+""",
+        encoding="utf-8",
+    )
+
+    assert validate_workflow(path, root=tmp_path) == []
+
+
 def test_local_actions_are_allowed_without_remote_revision(tmp_path: Path) -> None:
     path = _workflow(
         tmp_path,

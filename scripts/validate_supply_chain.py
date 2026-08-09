@@ -3,6 +3,7 @@
 
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 ACTION_REFERENCE = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<reference>[^\s#]+)", re.MULTILINE)
@@ -13,15 +14,21 @@ PERMISSIONS_HEADER = re.compile(
     re.MULTILINE,
 )
 PERMISSION_ENTRY = re.compile(r"^(?P<name>[a-z-]+):\s*(?P<access>read|write|none)\s*$")
+RELEASE_WORKFLOW = Path(".github/workflows/release-artifacts.yml")
+RELEASE_WRITE_PERMISSIONS = {"artifact-metadata", "attestations", "id-token"}
 
 REQUIRED_FILES = (
+    Path("build-constraints.txt"),
     Path(".github/dependabot.yml"),
     Path(".github/workflows/dependency-review.yml"),
+    RELEASE_WORKFLOW,
     Path(".github/workflows/sbom.yml"),
     Path("docs/adr/0020-actionable-vulnerability-exceptions.md"),
+    Path("docs/adr/0021-reproducible-release-provenance.md"),
     Path("docs/SUPPLY_CHAIN.md"),
     Path("scripts/enforce_vulnerability_policy.py"),
     Path("scripts/install_security_tools.sh"),
+    Path("scripts/prepare_release_artifacts.py"),
     Path("scripts/validate_security_evidence.py"),
     Path("security/vulnerability-exceptions.json"),
 )
@@ -85,6 +92,9 @@ def validate_workflow(path: Path, *, root: Path | None = None) -> list[str]:
         return [f"{display}: could not read workflow: {exc}"]
 
     errors: list[str] = []
+    allowed_write_permissions = (
+        RELEASE_WRITE_PERMISSIONS if display == RELEASE_WORKFLOW.as_posix() else set()
+    )
     lines = text.splitlines()
     permission_blocks = list(PERMISSIONS_HEADER.finditer(text))
     top_level = next((block for block in permission_blocks if block.group("indent") == ""), None)
@@ -109,9 +119,10 @@ def validate_workflow(path: Path, *, root: Path | None = None) -> list[str]:
         line_number = text[: block.start()].count("\n")
         entries = _permission_entries(lines, line_number, len(block.group("indent")))
         for name, access in entries.items():
-            if access == "write":
+            if access == "write" and name not in allowed_write_permissions:
                 errors.append(
-                    f"{display}: write permission is not allowed in P1.6a ({name}: write)"
+                    f"{display}: write permission is outside the release-provenance allowlist "
+                    f"({name}: write)"
                 )
 
     for match in ACTION_REFERENCE.finditer(text):
@@ -195,6 +206,83 @@ def _validate_baseline_configuration(root: Path) -> list[str]:
         checksums = re.findall(r'checksum="([0-9a-f]{64})"', text)
         if len(checksums) != 8 or len(set(checksums)) != 8:
             errors.append("install_security_tools.sh: expected eight unique platform checksums")
+
+    release_path = root / RELEASE_WORKFLOW
+    if release_path.is_file():
+        text = release_path.read_text(encoding="utf-8")
+        required_release_controls = {
+            "tag-only trigger": "tags:",
+            "commit-derived timestamp": "SOURCE_DATE_EPOCH",
+            "pinned isolated build environment": "--build-constraints build-constraints.txt",
+            "release contract validation": "prepare_release_artifacts.py",
+            "checksum publication": "SHA256SUMS",
+            "checksum-bound attestation": "subject-checksums: dist/SHA256SUMS",
+            "GitHub provenance": ("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6"),
+            "OIDC signing permission": "id-token: write",
+            "attestation permission": "attestations: write",
+            "artifact metadata permission": "artifact-metadata: write",
+            "artifact retention": "retention-days: 30",
+        }
+        for control, marker in required_release_controls.items():
+            if marker not in text:
+                errors.append(f"release-artifacts.yml: missing {control}")
+        if text.count("uv build --build-constraints") != 2:
+            errors.append("release-artifacts.yml: exactly two reproducibility builds are required")
+        if "pull_request:" in text:
+            errors.append("release-artifacts.yml: provenance must not run for pull requests")
+        for forbidden in ("contents: write", "packages: write", "gh release", "docker push"):
+            if forbidden in text:
+                errors.append(
+                    f"release-artifacts.yml: forbidden publication capability {forbidden!r}"
+                )
+
+    pyproject_path = root / "pyproject.toml"
+    if pyproject_path.is_file():
+        try:
+            with pyproject_path.open("rb") as handle:
+                pyproject = tomllib.load(handle)
+            project = pyproject["project"]
+            name = project["name"]
+            build_requires = pyproject["build-system"]["requires"]
+            selection = pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]["only-include"]
+        except (KeyError, OSError, tomllib.TOMLDecodeError, TypeError) as exc:
+            errors.append(f"pyproject.toml: invalid explicit sdist selection: {exc}")
+        else:
+            module = re.sub(r"[-.]+", "_", name).lower() if isinstance(name, str) else ""
+            expected = {
+                f"src/{module}",
+                "CHANGELOG.md",
+                "LICENSE",
+                "README.pt-BR.md",
+            }
+            actual = (
+                {item for item in selection if isinstance(item, str)}
+                if isinstance(selection, list)
+                else set()
+            )
+            if actual != expected:
+                errors.append(
+                    "pyproject.toml: sdist only-include must match the release content allowlist"
+                )
+            if build_requires != ["hatchling==1.31.0"]:
+                errors.append("pyproject.toml: Hatchling build backend must remain exactly pinned")
+
+    constraints_path = root / "build-constraints.txt"
+    if constraints_path.is_file():
+        constraints = {
+            line
+            for raw_line in constraints_path.read_text(encoding="utf-8").splitlines()
+            if (line := raw_line.strip()) and not line.startswith("#")
+        }
+        expected_constraints = {
+            "hatchling==1.31.0",
+            "packaging==26.3",
+            "pathspec==1.1.1",
+            "pluggy==1.6.0",
+            "trove-classifiers==2026.6.1.19",
+        }
+        if constraints != expected_constraints:
+            errors.append("build-constraints.txt: isolated build environment must remain exact")
     return errors
 
 

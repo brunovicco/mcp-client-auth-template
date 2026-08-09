@@ -146,6 +146,8 @@ before choosing a storage adapter.
   pull-request dependency/license review;
 - CycloneDX source/runtime inventories plus checksum-verified image vulnerability evidence and a
   fail-closed, time-bounded exception gate;
+- allowlisted, byte-reproducible Python release artifacts with SHA-256 manifests and GitHub build
+  provenance attestations;
 - Python 3.13/3.14 against MCP SDK 2.0.0 and the latest compatible 2.x;
 - Entra/generic OIDC across production HTTPS and explicit IPv4/IPv6 loopback profiles;
 - real 12-scenario OAuth/MCP E2E against the companion server, including fail-closed cases;
