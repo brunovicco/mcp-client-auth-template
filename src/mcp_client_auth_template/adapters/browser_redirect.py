@@ -21,5 +21,5 @@ async def open_system_browser(authorization_url: str) -> None:
     """
     opened = webbrowser.open(authorization_url)
     if not opened:
-        logger.info("browser_open_failed", url=authorization_url)
+        logger.info("browser_open_failed")
     print(f"Open this URL to authorize: {authorization_url}")

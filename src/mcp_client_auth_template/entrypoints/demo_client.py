@@ -11,6 +11,7 @@ token and refresh it silently instead of prompting again.
 """
 
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
 from typing import cast
 
 import anyio
@@ -24,6 +25,7 @@ from mcp.client import Client
 from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.auth import AuthorizationCodeResult
+from mcp.types import CallToolResult
 
 from mcp_client_auth_template.adapters.browser_redirect import open_system_browser
 from mcp_client_auth_template.adapters.entra_client_auth import build_entra_oauth_provider
@@ -34,15 +36,16 @@ from mcp_client_auth_template.adapters.oauth_discovery_security import (
     PinnedDnsAsyncTransport,
 )
 from mcp_client_auth_template.adapters.token_storage import FileTokenStorage, InMemoryTokenStorage
+from mcp_client_auth_template.entrypoints.cli_failures import (
+    ClientExitCode,
+    ToolCallFailedError,
+    classify_failure,
+    emit_failure,
+)
+from mcp_client_auth_template.entrypoints.preflight import load_validated_settings
 from mcp_client_auth_template.entrypoints.settings import Settings
 
 logger = structlog.get_logger(__name__)
-
-# Mirrors mcp.shared._httpx_utils.create_mcp_http_client's defaults (not used directly
-# since that module isn't part of the SDK's exported public surface): a longer read
-# timeout than connect/write/pool, since the streamable-HTTP transport may hold a
-# response stream open for server-sent events.
-_HTTP_TIMEOUT = httpx2.Timeout(30.0, read=300.0)
 
 _SERVICE_NAME = "mcp-client-auth-template"
 _SERVICE_VERSION = "0.1.0"
@@ -73,10 +76,14 @@ def build_secure_http_transport(
     policy: OAuthDiscoverySecurityPolicy,
     observability: Observability,
 ) -> httpx2.AsyncBaseTransport:
-    """Wrap DNS-pinned egress with the existing a2a-otel-kit tracing transport."""
+    """Wrap DNS-pinned egress with tracing and no implicit transport retries."""
+
+    def transport_factory() -> httpx2.AsyncBaseTransport:
+        return httpx2.AsyncHTTPTransport(retries=0)
+
     secure_transport = PinnedDnsAsyncTransport(
         policy=policy,
-        transport_factory=httpx2.AsyncHTTPTransport,
+        transport_factory=transport_factory,
         max_hosts=settings.oauth_max_hosts,
     )
     traced = TracingAsyncTransport.wrap(
@@ -134,6 +141,46 @@ async def build_oauth_provider(
     )
 
 
+def build_http_timeout(settings: Settings) -> httpx2.Timeout:
+    """Build distinct connection, read, write and pool budgets for the shared HTTP stack."""
+    return httpx2.Timeout(
+        connect=settings.http_connect_timeout_seconds,
+        read=settings.http_read_timeout_seconds,
+        write=settings.http_write_timeout_seconds,
+        pool=settings.http_pool_timeout_seconds,
+    )
+
+
+async def call_tool_with_budget(
+    client: Client,
+    tool_name: str,
+    *,
+    timeout_seconds: float,
+) -> CallToolResult:
+    """Call one MCP tool once and cancel the in-flight request when its budget expires."""
+    try:
+        with anyio.fail_after(timeout_seconds):
+            result = await client.call_tool(tool_name)
+        if result.is_error:
+            logger.warning("mcp_tool_failed", tool_name=tool_name)
+            raise ToolCallFailedError(tool_name)
+        return result
+    except TimeoutError:
+        logger.warning(
+            "mcp_tool_timeout",
+            tool_name=tool_name,
+            timeout_seconds=timeout_seconds,
+        )
+        raise
+
+
+async def close_with_budget(exit_stack: AsyncExitStack, *, timeout_seconds: float) -> bool:
+    """Close async client resources under a shielded deadline; return whether it expired."""
+    with anyio.move_on_after(timeout_seconds, shield=True) as scope:
+        await exit_stack.aclose()
+    return scope.cancelled_caught
+
+
 def build_mcp_client(settings: Settings, *, http_client: httpx2.AsyncClient) -> Client:
     """Return the SDK v2 high-level client with automatic protocol negotiation.
 
@@ -150,13 +197,18 @@ def build_mcp_client(settings: Settings, *, http_client: httpx2.AsyncClient) -> 
 
 async def run_demo() -> None:
     """Authenticate against the configured provider and call ``whoami`` and ``health``."""
-    settings = Settings()  # values come from the environment
+    settings = load_validated_settings()
     observability = Observability.configure(build_observability_settings())
+    exit_stack = AsyncExitStack()
     try:
         storage = build_token_storage(settings)
         network_policy = build_oauth_network_policy(settings)
         loopback = LoopbackCallbackServer(
-            host=settings.redirect_host, port=settings.redirect_port, path=settings.redirect_path
+            host=settings.redirect_host,
+            port=settings.redirect_port,
+            path=settings.redirect_path,
+            timeout_seconds=settings.oauth_callback_timeout_seconds,
+            max_requests=settings.oauth_callback_max_requests,
         )
 
         oauth_provider = await build_oauth_provider(
@@ -170,35 +222,65 @@ async def run_demo() -> None:
 
         # Tracing remains the outer transport so spans keep the logical hostname. The security
         # transport underneath resolves and pins the actual connect IP without exposing that
-        # implementation detail as the application-level request URL.
+        # implementation detail as the application-level request URL. Child transports use
+        # retries=0 so only the caller can make an idempotency-aware retry decision.
         transport = build_secure_http_transport(
             settings, policy=network_policy, observability=observability
         )
-
-        async with (
+        http_client = await exit_stack.enter_async_context(
             httpx2.AsyncClient(
                 auth=oauth_provider,
                 follow_redirects=True,
                 max_redirects=settings.oauth_max_redirects,
-                timeout=_HTTP_TIMEOUT,
+                timeout=build_http_timeout(settings),
                 transport=transport,
-            ) as http_client,
-            build_mcp_client(settings, http_client=http_client) as client,
-        ):
-            logger.info("mcp_connected", protocol_version=client.protocol_version)
+            )
+        )
+        client = await exit_stack.enter_async_context(
+            build_mcp_client(settings, http_client=http_client)
+        )
+        logger.info("mcp_connected", protocol_version=client.protocol_version)
 
-            whoami = await client.call_tool("whoami")
-            logger.info("whoami", result=whoami.structured_content)
+        await call_tool_with_budget(
+            client, "whoami", timeout_seconds=settings.tool_call_timeout_seconds
+        )
+        logger.info("mcp_tool_completed", tool_name="whoami")
 
-            health = await client.call_tool("health")
-            logger.info("health", result=health.structured_content)
+        await call_tool_with_budget(
+            client, "health", timeout_seconds=settings.tool_call_timeout_seconds
+        )
+        logger.info("mcp_tool_completed", tool_name="health")
     finally:
-        observability.shutdown()
+        try:
+            shutdown_timed_out = await close_with_budget(
+                exit_stack, timeout_seconds=settings.shutdown_timeout_seconds
+            )
+            if shutdown_timed_out:
+                logger.warning(
+                    "mcp_shutdown_timeout",
+                    timeout_seconds=settings.shutdown_timeout_seconds,
+                )
+        finally:
+            observability.shutdown()
+
+
+def run_cli() -> ClientExitCode:
+    """Run the demo and translate expected failures into stable process exit codes."""
+    try:
+        anyio.run(run_demo)
+    except KeyboardInterrupt:
+        logger.warning("mcp_client_interrupted")
+        return ClientExitCode.INTERRUPTED
+    except Exception as exc:
+        failure = classify_failure(exc)
+        emit_failure(failure)
+        return failure.exit_code
+    return ClientExitCode.SUCCESS
 
 
 def main() -> None:
     """Synchronous entrypoint for ``uv run python -m ...``."""
-    anyio.run(run_demo)
+    raise SystemExit(int(run_cli()))
 
 
 if __name__ == "__main__":

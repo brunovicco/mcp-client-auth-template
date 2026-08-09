@@ -49,7 +49,7 @@ async def test_build_oauth_provider_dispatches_to_entra() -> None:
         auth_provider="entra",
         server_url="https://mcp.example.invalid",
         entra_tenant_id="11111111-1111-1111-1111-111111111111",
-        entra_client_id="client-abc",
+        entra_client_id="22222222-2222-2222-2222-222222222222",
     )
 
     provider = await build_oauth_provider(
