@@ -141,7 +141,9 @@ before choosing a storage adapter.
 ## Engineering evidence
 
 - deterministic quality gate covering lint, format, strict Mypy, architecture, tests, coverage,
-  Bandit, and dependency audit;
+  Bandit, dependency audit, and an executable supply-chain trust baseline;
+- SHA-pinned GitHub Actions, read-only workflow permissions, weekly controlled updates, and
+  pull-request dependency/license review;
 - Python 3.13/3.14 against MCP SDK 2.0.0 and the latest compatible 2.x;
 - Entra/generic OIDC across production HTTPS and explicit IPv4/IPv6 loopback profiles;
 - real 12-scenario OAuth/MCP E2E against the companion server, including fail-closed cases;
@@ -164,6 +166,7 @@ reading request or response bodies. Export is network-silent unless explicitly e
 | [Cross-repository E2E](docs/E2E.md) | Happy paths, fail-closed matrix, and local execution |
 | [Operations](docs/OPERATIONS.md) | Preflight, timeouts, shutdown, failure categories, and containers |
 | [Privacy](docs/PRIVACY.md) | Token inventory, storage controls, retention, and external processors |
+| [Supply chain](docs/SUPPLY_CHAIN.md) | Dependency policy, CI trust boundary, threats, and exceptions |
 | [Observability](docs/OBSERVABILITY.md) | OpenTelemetry configuration and content-exclusion policy |
 | [Development](docs/DEVELOPMENT.md) | Local environment, checks, and container workflow |
 | [Architecture decisions](docs/adr/) | Rationale and trade-offs behind material decisions |
