@@ -7,6 +7,19 @@ pre-1.0 and remains a reference template under active development.
 
 ## [Unreleased]
 
+### Changed
+
+- Upgraded to `a2a-otel-kit[mcp]>=0.6,<0.7` and its native MCP SDK 2.x/HTTPX2 observability
+  boundary.
+- Removed the direct plain-HTTPX dependency and the nominal cross-package casts that were needed
+  by the previous adapter.
+
+### Security
+
+- Preserved metadata-only W3C propagation, network-silent defaults, and the existing rule that
+  tracing never captures credentials, MCP payloads, request/response bodies, arbitrary headers,
+  URLs, baggage, or exception text.
+
 ## [0.3.0] - 2026-08-09
 
 ### Added

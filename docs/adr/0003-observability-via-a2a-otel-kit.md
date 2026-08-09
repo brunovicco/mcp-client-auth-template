@@ -1,9 +1,13 @@
 # ADR-0003: Observability via `a2a-otel-kit`, not the harness's generic scaffolding
 
-- Status: Accepted
+- Status: Superseded by ADR-0019
 - Date: 2026-08-07
 
 ## Context
+
+> Historical note: this ADR records the original `a2a-otel-kit` 0.4 integration. Its HTTPX
+> compatibility workaround and dependency constraints were superseded by ADR-0019 after version
+> 0.6 added native MCP SDK 2.x/HTTPX2 support.
 
 `codex-python-engineering-harness` scaffolds a generic, MCP-unaware observability stack:
 `adapters/observability.py` (a hand-rolled OpenTelemetry `TelemetryLifecycle`/`SafeTracer`/

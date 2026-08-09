@@ -4,7 +4,8 @@ Observability in this project is provided entirely by [`a2a-otel-kit`](https://g
 a small MIT-licensed library that bundles a vendor-neutral OpenTelemetry tracer, a structlog
 bootstrap, and a Streamable HTTP transport adapter for the official `mcp` Python SDK. See
 `docs/adr/0003-observability-via-a2a-otel-kit.md` for why it replaced this project's own
-hand-rolled scaffolding.
+hand-rolled scaffolding and `docs/adr/0019-native-mcp-v2-observability.md` for the native MCP SDK
+2.x boundary adopted with version 0.6.
 
 ## What is wired up
 
@@ -15,6 +16,8 @@ OpenTelemetry tracer exporting via OTLP/HTTP. It then wraps the mcp SDK's HTTP t
 W3C `traceparent`/`tracestate` header and produces one CLIENT span
 (`mcp.client.streamable_http`) — without ever reading a request or response body.
 `observability.shutdown()` runs in a `finally` block so pending spans flush even when a run fails.
+The adapter and the MCP SDK now share the same `httpx2.AsyncBaseTransport` contract directly; no
+plain-HTTPX dependency, nominal cross-package casts, or import aliasing is involved.
 
 ## Default behavior
 
@@ -32,7 +35,7 @@ single-entrypoint demo and are not configurable via environment.
 | Variable | Required | Purpose |
 |---|---|---|
 | `A2A_OTEL_ENABLED` | no (default `false`) | `true` turns on the OTel tracer and OTLP export |
-| `A2A_OTEL_OTLP_ENDPOINT` | required when `A2A_OTEL_ENABLED=true` | Base OTLP HTTP endpoint |
+| `A2A_OTEL_OTLP_ENDPOINT` | required when `A2A_OTEL_ENABLED=true` | Complete OTLP HTTP traces endpoint, for example `http://localhost:4318/v1/traces` |
 | `A2A_OTEL_OTLP_TIMEOUT_SECONDS` | no (default `10.0`) | Export request timeout |
 | `A2A_OTEL_LOG_LEVEL` | no (default `INFO`) | Standard-library log level name |
 | `A2A_OTEL_LOG_FORMAT` | no (default `json`) | `json` or `console` |
