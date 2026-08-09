@@ -141,7 +141,9 @@ Leia [Privacidade e tratamento de dados](docs/PRIVACY.md) antes de escolher um a
 ## Evidências de engenharia
 
 - quality gate determinístico com lint, format, Mypy estrito, arquitetura, testes, cobertura,
-  Bandit e auditoria de dependências;
+  Bandit, auditoria de dependências e baseline executável de confiança da supply chain;
+- GitHub Actions fixadas por SHA, permissões read-only, updates semanais controlados e revisão de
+  dependências/licenças nos pull requests;
 - Python 3.13/3.14 contra MCP SDK 2.0.0 e a versão 2.x compatível mais recente;
 - Entra/OIDC genérico em HTTPS de produção e perfis locais IPv4/IPv6 explicitamente habilitados;
 - E2E OAuth/MCP real de 12 cenários contra o servidor companheiro, incluindo casos fail-closed;
@@ -166,6 +168,7 @@ bodies de request ou response. O export é silencioso em rede, a menos que
 | [E2E entre repositórios](docs/E2E.md) | Happy paths, matriz fail-closed e execução local |
 | [Operações](docs/OPERATIONS.md) | Preflight, timeouts, shutdown, categorias de falha e containers |
 | [Privacidade](docs/PRIVACY.md) | Inventário de tokens, storage, retenção e processadores externos |
+| [Supply chain](docs/SUPPLY_CHAIN.pt-BR.md) | Política de dependências, confiança no CI, ameaças e exceções |
 | [Observabilidade](docs/OBSERVABILITY.md) | OpenTelemetry e política de exclusão de conteúdo |
 | [Desenvolvimento](docs/DEVELOPMENT.md) | Ambiente local, checks e workflow do container |
 | [Decisões de arquitetura](docs/adr/) | Justificativas e trade-offs das decisões materiais |
