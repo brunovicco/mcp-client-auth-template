@@ -1,9 +1,12 @@
 .venv/
 .git/
 .github/
-.codex/
+.agent/
 .agents/
+.codex/
 .claude/
+.cursor/
+.aider/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
