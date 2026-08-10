@@ -14,8 +14,13 @@ PERMISSIONS_HEADER = re.compile(
     re.MULTILINE,
 )
 PERMISSION_ENTRY = re.compile(r"^(?P<name>[a-z-]+):\s*(?P<access>read|write|none)\s*$")
+JOB_HEADER = re.compile(r"^  (?P<name>[A-Za-z0-9_-]+):\s*(?:#.*)?$")
 RELEASE_WORKFLOW = Path(".github/workflows/release-artifacts.yml")
-RELEASE_WRITE_PERMISSIONS = {"artifact-metadata", "attestations", "id-token"}
+RELEASE_JOB_WRITE_PERMISSIONS = {
+    "build-python-artifacts": {"artifact-metadata", "attestations", "id-token"},
+    "publish-container": {"artifact-metadata", "attestations", "id-token", "packages"},
+    "publish-github-release": {"contents"},
+}
 
 REQUIRED_FILES = (
     Path("build-constraints.txt"),
@@ -25,10 +30,12 @@ REQUIRED_FILES = (
     Path(".github/workflows/sbom.yml"),
     Path("docs/adr/0020-actionable-vulnerability-exceptions.md"),
     Path("docs/adr/0021-reproducible-release-provenance.md"),
+    Path("docs/adr/0022-secure-release-publication.md"),
     Path("docs/SUPPLY_CHAIN.md"),
     Path("scripts/enforce_vulnerability_policy.py"),
     Path("scripts/install_security_tools.sh"),
     Path("scripts/prepare_release_artifacts.py"),
+    Path("scripts/prepare_release_publication.py"),
     Path("scripts/validate_security_evidence.py"),
     Path("security/vulnerability-exceptions.json"),
 )
@@ -83,6 +90,19 @@ def _checkout_discards_credentials(lines: list[str], uses_line: int) -> bool:
     return False
 
 
+def _permission_job(lines: list[str], start: int, indent: int) -> str | None:
+    """Return the job that owns a job-level permissions block."""
+    if indent != 4:
+        return None
+    for line in reversed(lines[:start]):
+        if line == "jobs:":
+            break
+        match = JOB_HEADER.fullmatch(line)
+        if match is not None:
+            return match.group("name")
+    return None
+
+
 def validate_workflow(path: Path, *, root: Path | None = None) -> list[str]:
     """Return trust-baseline violations for one GitHub Actions workflow."""
     display = _display(path, root)
@@ -92,9 +112,6 @@ def validate_workflow(path: Path, *, root: Path | None = None) -> list[str]:
         return [f"{display}: could not read workflow: {exc}"]
 
     errors: list[str] = []
-    allowed_write_permissions = (
-        RELEASE_WRITE_PERMISSIONS if display == RELEASE_WORKFLOW.as_posix() else set()
-    )
     lines = text.splitlines()
     permission_blocks = list(PERMISSIONS_HEADER.finditer(text))
     top_level = next((block for block in permission_blocks if block.group("indent") == ""), None)
@@ -117,12 +134,19 @@ def validate_workflow(path: Path, *, root: Path | None = None) -> list[str]:
             errors.append(f"{display}: permissions must use an explicit mapping")
             continue
         line_number = text[: block.start()].count("\n")
-        entries = _permission_entries(lines, line_number, len(block.group("indent")))
+        indent = len(block.group("indent"))
+        entries = _permission_entries(lines, line_number, indent)
+        job = _permission_job(lines, line_number, indent)
+        allowed_write_permissions = (
+            RELEASE_JOB_WRITE_PERMISSIONS.get(job, set())
+            if display == RELEASE_WORKFLOW.as_posix() and job is not None
+            else set()
+        )
         for name, access in entries.items():
             if access == "write" and name not in allowed_write_permissions:
                 errors.append(
-                    f"{display}: write permission is outside the release-provenance allowlist "
-                    f"({name}: write)"
+                    f"{display}: write permission is outside the job allowlist "
+                    f"({job or 'workflow'}: {name}: write)"
                 )
 
     for match in ACTION_REFERENCE.finditer(text):
@@ -212,29 +236,74 @@ def _validate_baseline_configuration(root: Path) -> list[str]:
         text = release_path.read_text(encoding="utf-8")
         required_release_controls = {
             "tag-only trigger": "tags:",
+            "serialized tag publication": "cancel-in-progress: false",
             "commit-derived timestamp": "SOURCE_DATE_EPOCH",
             "pinned isolated build environment": "--build-constraints build-constraints.txt",
             "release contract validation": "prepare_release_artifacts.py",
-            "checksum publication": "SHA256SUMS",
+            "package checksum publication": "SHA256SUMS",
             "checksum-bound attestation": "subject-checksums: dist/SHA256SUMS",
             "GitHub provenance": ("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6"),
             "OIDC signing permission": "id-token: write",
             "attestation permission": "attestations: write",
             "artifact metadata permission": "artifact-metadata: write",
-            "artifact retention": "retention-days: 30",
+            "package SBOM attestation": "subject-checksums: build/python-artifacts/SHA256SUMS",
+            "image digest subject": "subject-digest:",
+            "registry attestation": "push-to-registry: true",
+            "pre-publication vulnerability policy": "enforce_vulnerability_policy.py",
+            "GHCR publication": "docker push",
+            "published digest record": "image-digest.txt",
+            "release assembly validation": "scripts.prepare_release_publication",
+            "GitHub Release publication": "gh release create",
+            "existing tag verification": "--verify-tag",
+            "pinned artifact restore": (
+                "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+            ),
+            "release evidence retention": "retention-days: 30",
         }
         for control, marker in required_release_controls.items():
             if marker not in text:
                 errors.append(f"release-artifacts.yml: missing {control}")
         if text.count("uv build --build-constraints") != 2:
             errors.append("release-artifacts.yml: exactly two reproducibility builds are required")
+        if text.count("sbom-path:") != 2:
+            errors.append("release-artifacts.yml: Python and image SBOM attestations are required")
+        if text.count("push-to-registry: true") != 2:
+            errors.append("release-artifacts.yml: both image attestations must be stored in GHCR")
+        if text.count("create-storage-record: false") != 2:
+            errors.append(
+                "release-artifacts.yml: user-owned repositories must disable storage records"
+            )
+        if text.count("contents: write") != 1 or text.count("packages: write") != 1:
+            errors.append(
+                "release-artifacts.yml: release and registry writes must each exist in one job"
+            )
         if "pull_request:" in text:
-            errors.append("release-artifacts.yml: provenance must not run for pull requests")
-        for forbidden in ("contents: write", "packages: write", "gh release", "docker push"):
-            if forbidden in text:
-                errors.append(
-                    f"release-artifacts.yml: forbidden publication capability {forbidden!r}"
-                )
+            errors.append("release-artifacts.yml: publication must not run for pull requests")
+        if ":latest" in text:
+            errors.append("release-artifacts.yml: mutable latest image tags are not allowed")
+        policy = text.find("enforce_vulnerability_policy.py")
+        login = text.find("docker login")
+        push = text.find("docker push")
+        if min(policy, login, push) < 0 or not policy < login < push:
+            errors.append(
+                "release-artifacts.yml: vulnerability policy must pass before registry login/push"
+            )
+
+    publication_path = root / "scripts/prepare_release_publication.py"
+    if publication_path.is_file():
+        text = publication_path.read_text(encoding="utf-8")
+        required_publication_controls = {
+            "complete release checksums": "RELEASE_SHA256SUMS",
+            "machine-readable release manifest": "release-manifest.json",
+            "source SBOM": "source.cdx.json",
+            "image SBOM": "image.cdx.json",
+            "complete vulnerability report": "grype.json",
+            "vulnerability policy decision": "policy.json",
+            "immutable image subject": "image-digest.txt",
+        }
+        for control, marker in required_publication_controls.items():
+            if marker not in text:
+                errors.append(f"prepare_release_publication.py: missing {control}")
 
     pyproject_path = root / "pyproject.toml"
     if pyproject_path.is_file():

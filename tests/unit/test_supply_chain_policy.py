@@ -90,7 +90,7 @@ jobs:
     assert any("contents: write" in error for error in errors)
 
 
-def test_release_workflow_allows_only_attestation_write_permissions(tmp_path: Path) -> None:
+def test_release_workflow_enforces_job_specific_write_permissions(tmp_path: Path) -> None:
     path = tmp_path / ".github/workflows/release-artifacts.yml"
     path.parent.mkdir(parents=True)
     path.write_text(
@@ -101,18 +101,76 @@ on:
 permissions:
   contents: read
 jobs:
-  attest:
+  build-python-artifacts:
     permissions:
       contents: read
       id-token: write
       attestations: write
       artifact-metadata: write
     steps: []
+  publish-container:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps: []
+  publish-github-release:
+    permissions:
+      contents: write
+    steps: []
 """,
         encoding="utf-8",
     )
 
     assert validate_workflow(path, root=tmp_path) == []
+
+
+def test_release_workflow_rejects_registry_write_in_build_job(tmp_path: Path) -> None:
+    path = tmp_path / ".github/workflows/release-artifacts.yml"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        """name: release
+on: push
+permissions:
+  contents: read
+jobs:
+  build-python-artifacts:
+    permissions:
+      contents: read
+      packages: write
+    steps: []
+""",
+        encoding="utf-8",
+    )
+
+    errors = validate_workflow(path, root=tmp_path)
+
+    assert any("build-python-artifacts: packages: write" in error for error in errors)
+
+
+def test_release_workflow_rejects_release_write_in_container_job(tmp_path: Path) -> None:
+    path = tmp_path / ".github/workflows/release-artifacts.yml"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        """name: release
+on: push
+permissions:
+  contents: read
+jobs:
+  publish-container:
+    permissions:
+      contents: write
+      packages: write
+    steps: []
+""",
+        encoding="utf-8",
+    )
+
+    errors = validate_workflow(path, root=tmp_path)
+
+    assert any("publish-container: contents: write" in error for error in errors)
 
 
 def test_local_actions_are_allowed_without_remote_revision(tmp_path: Path) -> None:

@@ -148,6 +148,8 @@ Leia [Privacidade e tratamento de dados](docs/PRIVACY.md) antes de escolher um a
   gate fail-closed para exceções temporárias;
 - artifacts Python de release com allowlist, reprodução byte a byte, manifestos SHA-256 e
   attestations de build provenance do GitHub;
+- GitHub Releases controladas por tag, com evidência completa de integridade, attestations
+  CycloneDX e imagem GHCR publicada e verificada por digest imutável;
 - Python 3.13/3.14 contra MCP SDK 2.0.0 e a versão 2.x compatível mais recente;
 - Entra/OIDC genérico em HTTPS de produção e perfis locais IPv4/IPv6 explicitamente habilitados;
 - E2E OAuth/MCP real de 12 cenários contra o servidor companheiro, incluindo casos fail-closed;
