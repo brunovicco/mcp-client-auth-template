@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-
 from scripts.reference_demo import DemoError, _modern_tool_request, _resolve_server_root
 
 
