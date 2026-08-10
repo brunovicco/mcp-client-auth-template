@@ -87,6 +87,41 @@ For the complete local pair, clone
 [`mcp-server-auth-template`](https://github.com/brunovicco/mcp-server-auth-template) beside this
 repository and follow [Cross-repository E2E](docs/E2E.md).
 
+### One-command reference demo
+
+With `mcp-server-auth-template` cloned beside this repository, the P1.7a reference demo needs no
+real IdP, browser, cloud account, or production credential:
+
+```bash
+./scripts/run_reference_demo.sh
+```
+
+It starts the deterministic local OIDC provider and the real companion server on ephemeral ports,
+then proves CIMD-first Authorization Code + PKCE, an authenticated `whoami`, runtime scope step-up
+through `health`, exact audience rejection, and sessionless MCP `2026-07-28` behavior. See
+[One-command reference demo](docs/REFERENCE_DEMO.md).
+
+### Docker Compose reference demo
+
+Run the same validated scenario in containers with the published Server `v0.5.0` by immutable digest:
+
+```bash
+./scripts/run_compose_demo.sh
+```
+
+See [Docker Compose reference demo](docs/COMPOSE_DEMO.md).
+
+### Observable reference demo
+
+Add Collector + Tempo + Grafana and positively verify distributed MCP traces:
+
+```bash
+./scripts/run_observability_demo.sh
+```
+
+Use `--keep` to leave Grafana on `http://127.0.0.1:3000`. See
+[Observable reference demo](docs/OBSERVABILITY_DEMO.md).
+
 ## Authentication modes
 
 | Mode | Providers | Credential lifecycle | Good fit |
@@ -195,6 +230,7 @@ reading request or response bodies. Export is network-silent unless explicitly e
 | [Architecture](docs/ARCHITECTURE.md) | Context, layers, ownership boundaries, and authorization sequence |
 | [Compatibility](docs/COMPATIBILITY.md) | Supported versions and executable client/server contract |
 | [Cross-repository E2E](docs/E2E.md) | Happy paths, fail-closed matrix, and local execution |
+| [Reference demo](docs/REFERENCE_DEMO.md) | One-command headless portfolio walkthrough |
 | [Operations](docs/OPERATIONS.md) | Preflight, timeouts, shutdown, failure categories, and containers |
 | [Privacy](docs/PRIVACY.md) | Token inventory, storage controls, retention, and external processors |
 | [Supply chain](docs/SUPPLY_CHAIN.md) | Dependency policy, CI trust boundary, threats, and exceptions |

@@ -43,6 +43,19 @@ single-entrypoint demo and are not configurable via environment.
 `ObservabilitySettings` rejects `A2A_OTEL_ENABLED=true` without an `A2A_OTEL_OTLP_ENDPOINT` at
 construction time, so a misconfigured "half-enabled" state cannot exist.
 
+## Executable P1.7c proof
+
+The optional [observable reference demo](OBSERVABILITY_DEMO.md) enables this existing
+instrumentation against Collector + Tempo + Grafana and fails unless positive receipt,
+shared MCP trace identity, Tempo retrieval, Grafana provisioning, and privacy checks
+all succeed.
+
+```bash
+./scripts/run_observability_demo.sh
+```
+
+P1.7a/P1.7b remain telemetry-network-silent unless this overlay is selected.
+
 ## Privacy and the attribute allowlist
 
 Span and structured-log attributes pass through

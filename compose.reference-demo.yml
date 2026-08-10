@@ -1,0 +1,88 @@
+name: mcp-auth-reference-demo
+
+x-hardening: &hardening
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  server:
+    image: "${MCP_DEMO_SERVER_IMAGE:-ghcr.io/brunovicco/mcp-server-auth-template@sha256:39d50ff235df634ef6c4b0d8a4cdef4c4c3be00094fce464eabafea88f216d9a}"
+    <<: *hardening
+    environment:
+      MCP_SERVER_RUNTIME_HOST: "0.0.0.0"
+      MCP_SERVER_RUNTIME_PORT: "8000"
+      MCP_SERVER_RESOURCE_SERVER_URL: "http://127.0.0.1:8000/"
+      MCP_SERVER_REQUIRED_SCOPES: '["mcp:tools:call"]'
+      MCP_SERVER_AUTH_PROVIDER: "generic"
+      MCP_SERVER_GENERIC_ISSUER_URL: "http://127.0.0.1:9000"
+      MCP_SERVER_GENERIC_AUDIENCE: "http://127.0.0.1:8000/"
+      MCP_SERVER_OIDC_ALLOW_INSECURE_LOOPBACK: "true"
+      LOG_LEVEL: "WARNING"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}));
+          opener.open("http://127.0.0.1:8000/livez", timeout=2).read()
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  oidc:
+    build:
+      context: .
+      dockerfile: Dockerfile.reference-oidc
+    image: mcp-auth-reference-oidc:p1.7b-local
+    <<: *hardening
+    network_mode: "service:server"
+    depends_on:
+      server:
+        condition: service_started
+    environment:
+      FAKE_OIDC_ISSUER: "http://127.0.0.1:9000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}));
+          opener.open("http://127.0.0.1:9000/.well-known/openid-configuration", timeout=2).read()
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  demo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp-client-auth-template:p1.7b-local
+    <<: *hardening
+    network_mode: "service:server"
+    depends_on:
+      server:
+        condition: service_healthy
+      oidc:
+        condition: service_healthy
+    environment:
+      A2A_OTEL_ENABLED: "false"
+    command:
+      - python
+      - -m
+      - scripts.compose_reference_demo
+      - --server-url
+      - "http://127.0.0.1:8000"
+      - --issuer
+      - "http://127.0.0.1:9000"

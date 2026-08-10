@@ -87,6 +87,17 @@ AS:
 
 ## Run locally
 
+For a portfolio-facing walkthrough that runs the same core boundary without invoking pytest, use
+[P1.7a — One-command headless reference demo](REFERENCE_DEMO.md):
+
+```bash
+./scripts/run_reference_demo.sh
+```
+
+The reference demo intentionally covers a compact narrative subset: CIMD-first interactive auth,
+authenticated tool use, runtime scope step-up, wrong-audience rejection, and stateless MCP
+`2026-07-28`. The E2E suite remains the broader regression matrix.
+
 Install the client environment, add the sibling server package to that environment, and opt into the
 E2E suite with `MCP_E2E_SERVER_ROOT`:
 
