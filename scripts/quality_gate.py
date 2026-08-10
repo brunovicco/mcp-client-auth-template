@@ -19,7 +19,7 @@ class Check:
 
 
 def load_settings(root: Path) -> dict[str, object]:
-    """Load harness quality settings from pyproject.toml."""
+    """Load project quality settings from pyproject.toml."""
     with (root / "pyproject.toml").open("rb") as handle:
         project = tomllib.load(handle)
     tool = project.get("tool")
@@ -65,7 +65,6 @@ def configured_checks(root: Path) -> list[Check]:
         Check("lint", ("ruff", "check", ".")),
         Check("format", ("ruff", "format", "--check", ".")),
         Check("architecture", (sys.executable, "scripts/validate_architecture.py")),
-        Check("mcp", (sys.executable, "scripts/validate_mcp_config.py")),
         Check("supply-chain", (sys.executable, "scripts/validate_supply_chain.py")),
         Check("governance", (sys.executable, "scripts/governance_gate.py")),
         Check(

@@ -9,32 +9,45 @@ uv sync --frozen --all-groups
 
 ## Before opening a PR
 
-Run the full quality gate — it's the same one CI runs:
+Run the complete quality gate:
 
 ```bash
 uv run python scripts/quality_gate.py
 ```
 
-Use `--list` to see the individual checks (lint, format, typing, tests, security, architecture,
-MCP config, governance, dependencies) or `--check NAME` to run one in isolation while iterating.
-Run a single test with `uv run pytest tests/unit/test_entra_client_auth.py::test_name`.
+Use `--list` to inspect the available checks or `--check NAME` for focused feedback while
+iterating. Run the full gate before requesting review.
 
-## Expectations
+For changes that affect the executable reference path, also run the relevant demo:
 
-- Keep the dependency direction `entrypoints -> application -> domain`, `adapters ->
-  application/domain`; `scripts/validate_architecture.py` enforces it.
-- Full type hints; mypy runs in `strict` mode.
-- Add or update tests for any behavior change — this repo treats coverage as a floor (80%), not
-  a target.
-- No secrets, tokens, or production personal data in code, tests, fixtures, or commit messages.
+```bash
+./scripts/run_reference_demo.sh --server-root /path/to/mcp-server-auth-template
+./scripts/run_compose_demo.sh
+./scripts/run_observability_demo.sh
+```
+
+## Engineering expectations
+
+- Preserve dependency direction: `entrypoints -> application -> domain`; adapters may depend on
+  application/domain, while domain never depends on outer layers.
+- Keep complete type hints and strict Mypy. Parse untrusted `Any` values at boundaries.
+- Do not use `from __future__ import annotations`; quote only individual forward references that
+  genuinely require deferred evaluation.
+- Validate external input and add explicit timeouts to external calls. Retry only bounded transient
+  operations and preserve idempotency for externally visible effects.
+- Add or update behavior-focused tests for every material behavior change. Coverage is a floor
+  (80%), not a target.
+- Never commit secrets, tokens, cookies, private keys, production personal data, or sensitive trace
+  payloads.
+- Keep logs/traces metadata-only where required by the observability policy.
 - Keep commits focused and the diff free of unrelated changes.
+- Keep editor and coding-agent state local. Tool-specific directories are intentionally ignored and
+  must not become project dependencies.
 
-See `CLAUDE.md` and `AGENTS.md` for the full engineering contract this repository follows,
-including the conventions AI coding agents working in this repo are expected to respect.
+See [Development](docs/DEVELOPMENT.md), [Architecture](docs/ARCHITECTURE.md), and the ADRs for the
+project-owned engineering contract.
 
 ## Questions
 
-Open an issue for anything that doesn't fit a straightforward PR — architecture questions,
-proposed provider adapters (a third authorization-server shape beyond Entra ID / generic OIDC),
-or anything that touches the sibling
-[`mcp-server-auth-template`](https://github.com/brunovicco/mcp-server-auth-template) repo.
+Open an issue for architecture changes, new provider shapes, or changes that affect the companion
+[`mcp-server-auth-template`](https://github.com/brunovicco/mcp-server-auth-template).

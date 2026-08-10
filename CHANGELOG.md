@@ -9,6 +9,8 @@ pre-1.0 and remains a reference template under active development.
 
 ### Added
 
+- Added P1.7d public-repository polish: concise EN/PT-BR landing pages, executable reference-demo CI, visual-evidence slots, and repository-hygiene regression coverage.
+- Removed checked-in coding-agent/Codex scaffolding and Codex-only MCP configuration policy so the public tree contains project-owned runtime, tests, CI and documentation.
 - Added P1.7c, an optional local observability overlay with `a2a-otel-kit`,
   OpenTelemetry Collector, Tempo, Grafana, positive Collector receipt verification,
   MCP client/server trace continuity, Tempo retrieval, Grafana datasource validation,

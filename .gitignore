@@ -8,11 +8,13 @@ __pycache__/
 .coverage
 coverage.xml
 htmlcov/
-.demo-observability/
 dist/
 build/
 build/governance-evidence/
 .venv/
+
+# Demo/runtime evidence
+.demo-observability/
 
 # Secrets and local configuration
 .env
@@ -23,8 +25,20 @@ build/governance-evidence/
 secrets/
 credentials/
 
-# Codex generated local state
-.codex/logs/
+# Local editor and coding-agent state
+.agent/
+.agents/
+.codex/
+.claude/
+.cursor/
+.aider/
+.harness.json
+AGENTS.md
+CLAUDE.md
+
+# Raw/temporary media used to prepare documentation assets
+docs/assets/raw/
+docs/assets/*.tmp.*
 
 # Editors and OS
 .DS_Store

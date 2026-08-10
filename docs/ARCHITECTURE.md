@@ -77,7 +77,27 @@ domain      -> no outer layer
 - Idempotency: required for externally visible side effects.
 - Packaging: containerized via the repo `Dockerfile` (multi-stage, uv-based); the runtime `CMD` is defined per project.
 
-## Diagrams
+## Executable reference topology
+
+```mermaid
+flowchart LR
+    Actor["Person / workload"] --> Client["MCP client"]
+    Client -->|"OAuth 2.1 / OIDC"| AS["Authorization server"]
+    Client -->|"MCP 2026-07-28"| Server["MCP resource server"]
+    Server -.->|"401 / 403 challenge"| Client
+
+    Client -.->|"W3C + OTLP"| Collector["OpenTelemetry Collector"]
+    Server -.->|"OTLP"| Collector
+    Collector --> Receipt["Verification receipt"]
+    Collector --> Tempo["Tempo"]
+    Tempo --> Grafana["Grafana"]
+```
+
+P1.7a proves the local process path, P1.7b proves the container topology, and P1.7c adds positive
+distributed-trace and privacy verification. The synthetic OIDC provider and local observability
+services are demo infrastructure, not production defaults.
+
+## Authorization sequence
 
 Interactive native-client authorization flow (one of the critical flows this service owns; the
 authorization server's own login/consent UI is out of scope):
