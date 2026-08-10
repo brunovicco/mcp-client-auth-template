@@ -88,6 +88,20 @@ Para rodar o par local completo, clone o
 [`mcp-server-auth-template`](https://github.com/brunovicco/mcp-server-auth-template) ao lado deste
 repositório e siga o [E2E entre repositórios](docs/E2E.md).
 
+### Demo de referência em um comando
+
+Com `mcp-server-auth-template` clonado ao lado deste repositório, a demo de referência P1.7a não
+precisa de IdP real, browser, cloud account ou credencial de produção:
+
+```bash
+./scripts/run_reference_demo.sh
+```
+
+Ela sobe o OIDC local determinístico e o server companheiro real em portas efêmeras e prova
+Authorization Code + PKCE CIMD-first, `whoami` autenticado, step-up de scope via `health`, rejeição
+exata de audience incorreta e comportamento MCP `2026-07-28` sem sessão. Veja
+[Demo de referência em um comando](docs/REFERENCE_DEMO.pt-BR.md).
+
 ## Modos de autenticação
 
 | Modo | Providers | Ciclo de vida da credencial | Uso indicado |
@@ -196,6 +210,7 @@ bodies de request ou response. O export é silencioso em rede, a menos que
 | [Arquitetura](docs/ARCHITECTURE.md) | Contexto, camadas, ownership e sequência de autorização |
 | [Compatibilidade](docs/COMPATIBILITY.md) | Versões suportadas e contrato executável cliente/servidor |
 | [E2E entre repositórios](docs/E2E.md) | Happy paths, matriz fail-closed e execução local |
+| [Demo de referência](docs/REFERENCE_DEMO.pt-BR.md) | Walkthrough headless de portfólio em um comando |
 | [Operações](docs/OPERATIONS.md) | Preflight, timeouts, shutdown, categorias de falha e containers |
 | [Privacidade](docs/PRIVACY.md) | Inventário de tokens, storage, retenção e processadores externos |
 | [Supply chain](docs/SUPPLY_CHAIN.pt-BR.md) | Política de dependências, confiança no CI, ameaças e exceções |
