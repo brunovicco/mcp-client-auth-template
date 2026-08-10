@@ -135,7 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("P1.7b COMPOSE REFERENCE DEMO PASSED")
         print("Topology: client + server + fake OIDC in isolated containers")
         print("Network:  shared namespace with real 127.0.0.1 loopback")
-        print("Server:   immutable published v0.5.0 image by digest")
+        print("Server:   immutable published image by digest")
         print("OAuth:    CIMD-first Authorization Code + PKCE")
         print("Catalog:  protected tools hidden from anonymous tools/list")
         print("Step-up:  mcp:tools:call -> + mcp:tools:health")

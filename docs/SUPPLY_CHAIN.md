@@ -117,17 +117,21 @@ source/image CycloneDX SBOMs, records the complete Grype report, and applies the
 exception policy before it receives a GHCR token. `publish-github-release` receives only
 `contents: write` and runs only after the other jobs succeed.
 
-The approved local image is tagged with the version and full commit, then pushed once. The workflow
-refuses to overwrite either tag, records the resulting `ghcr.io/...@sha256:...` subject, and creates
-both build-provenance and CycloneDX SBOM attestations for that digest in GHCR. Tags are discovery
-aliases; deployment and verification must use the digest from `image-digest.txt`.
+Starting with v0.6.0, the container boundary is multi-platform. The job builds
+`linux/amd64` and `linux/arm64` locally, generates independent CycloneDX/Grype/policy evidence for
+each, and only authenticates to GHCR after both policies pass. The exact scanned local images are
+pushed under immutable architecture-specific version/commit tags; no post-scan rebuild occurs. The
+workflow then creates the version and commit OCI indexes from the two canonical platform digests
+and requires both index tags to resolve to one digest. `image-platforms.json` records and validates
+the exact mapping.
 
-The GitHub Release contains the wheel, sdist, package checksum manifest, source/image SBOMs,
-complete Grype report, policy result, image subject, `release-manifest.json`, and
-`RELEASE_SHA256SUMS`. The final validator accepts only that file set, rechecks the package archives
-and checksums, validates evidence identities and policy status, and binds the tag, source commit,
-repository, and image digest before `gh release create --verify-tag` runs. PyPI publication is not
-part of P1.6d.
+The final OCI index receives build provenance. Each platform digest receives its own CycloneDX SBOM
+attestation. The GitHub Release contains the wheel, sdist, package checksum manifest, source SBOM,
+per-platform image SBOMs, complete Grype reports, per-platform policy results, final image subject,
+`image-platforms.json`, `release-manifest.json`, and `RELEASE_SHA256SUMS`. The validator accepts
+only that file set and binds the tag, source commit, repository, final index digest, exact platform
+set, and platform digests before `gh release create --verify-tag` runs. PyPI publication remains
+out of scope.
 
 GHCR package visibility is an administrator-controlled setting, not a workflow permission. After
 the first publication, mark the linked container package public if anonymous consumption is
@@ -152,8 +156,8 @@ docker pull "$image"
 For a coordinated server/client version, publish and verify the server first. Publish the client
 tag only after the server assets and digest pass verification. This ordering avoids announcing a
 client whose companion server release is incomplete; it creates no cross-repository CI dependency.
-[ADR-0022](adr/0022-secure-release-publication.md) records the authority split, residual failure
-mode, and release ceremony.
+[ADR-0022](adr/0022-secure-release-publication.md) records the authority split and release ceremony.
+[ADR-0023](adr/0023-multi-platform-release-publication.md) records the multi-platform scan-before-publish decision.
 
 ## Executable evidence
 

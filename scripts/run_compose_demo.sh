@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${ROOT}/compose.reference-demo.yml"
 PROJECT_NAME="${MCP_COMPOSE_PROJECT_NAME:-mcp-auth-reference-demo}"
-DEFAULT_SERVER_IMAGE="ghcr.io/brunovicco/mcp-server-auth-template@sha256:39d50ff235df634ef6c4b0d8a4cdef4c4c3be00094fce464eabafea88f216d9a"
+DEFAULT_SERVER_IMAGE="ghcr.io/brunovicco/mcp-server-auth-template@sha256:4a220992b5df2382b2f821713b8b4c840469e4465395cbdeb1349dee0f8a1110"
 SERVER_IMAGE="${MCP_DEMO_SERVER_IMAGE:-$DEFAULT_SERVER_IMAGE}"
 
 die() {
@@ -58,7 +58,7 @@ compose config --quiet
 printf '==> Removing stale demo state\n'
 compose down --volumes --remove-orphans >/dev/null 2>&1 || true
 
-printf '==> Pulling immutable public Server v0.5.0 image\n'
+printf '==> Pulling immutable public Server image by digest\n'
 compose pull server
 
 printf '==> Building client and deterministic fake OIDC images\n'

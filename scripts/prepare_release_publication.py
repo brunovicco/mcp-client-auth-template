@@ -29,11 +29,19 @@ PACKAGE_CHECKSUM = re.compile(r"^(?P<digest>[0-9a-f]{64})  (?P<name>[^/\\]+)$")
 REPOSITORY_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 MAX_SBOM_BYTES = 16 * 1024 * 1024
 MAX_EVIDENCE_BYTES = 128 * 1024 * 1024
+PLATFORMS = {
+    "linux/amd64": "amd64",
+    "linux/arm64": "arm64",
+}
 EVIDENCE_FILES = {
-    "grype.json",
+    "grype-amd64.json",
+    "grype-arm64.json",
+    "image-amd64.cdx.json",
+    "image-arm64.cdx.json",
     "image-digest.txt",
-    "image.cdx.json",
-    "policy.json",
+    "image-platforms.json",
+    "policy-amd64.json",
+    "policy-arm64.json",
     "source.cdx.json",
 }
 
@@ -134,6 +142,53 @@ def _validate_identity(
     return identity.name, identity.module, identity.version
 
 
+def _validate_platform_evidence(
+    path: Path,
+    *,
+    image_name: str,
+    image_digest: str,
+    tag: str,
+    commit: str,
+) -> dict[str, dict[str, object]]:
+    document = load_document(path)
+    if document.get("schema_version") != 1:
+        raise ReleasePublicationError(f"{path}: schema_version must be 1")
+    index = document.get("index")
+    if not isinstance(index, dict):
+        raise ReleasePublicationError(f"{path}: index must be an object")
+    if index.get("digest") != image_digest:
+        raise ReleasePublicationError(f"{path}: index digest does not match published image")
+    if index.get("reference") != f"{image_name}@{image_digest}":
+        raise ReleasePublicationError(f"{path}: index reference does not match published image")
+    if index.get("tags") != [tag, f"sha-{commit}"]:
+        raise ReleasePublicationError(f"{path}: index tags do not match release identity")
+
+    platforms = document.get("platforms")
+    if not isinstance(platforms, dict) or set(platforms) != set(PLATFORMS):
+        raise ReleasePublicationError(f"{path}: exact amd64/arm64 platform set is required")
+
+    normalized: dict[str, dict[str, object]] = {}
+    digests: set[str] = set()
+    for platform, architecture in PLATFORMS.items():
+        record = platforms.get(platform)
+        if not isinstance(record, dict):
+            raise ReleasePublicationError(f"{path}: {platform} record must be an object")
+        digest = record.get("digest")
+        if not isinstance(digest, str) or IMAGE_DIGEST.fullmatch(digest) is None:
+            raise ReleasePublicationError(f"{path}: {platform} digest must be sha256")
+        if digest in digests:
+            raise ReleasePublicationError(f"{path}: platform digests must be unique")
+        digests.add(digest)
+        if record.get("os") != "linux" or record.get("architecture") != architecture:
+            raise ReleasePublicationError(f"{path}: invalid platform identity for {platform}")
+        if record.get("reference") != f"{image_name}@{digest}":
+            raise ReleasePublicationError(f"{path}: invalid platform reference for {platform}")
+        if record.get("tags") != [f"{tag}-{architecture}", f"sha-{commit}-{architecture}"]:
+            raise ReleasePublicationError(f"{path}: invalid platform tags for {platform}")
+        normalized[platform] = dict(record)
+    return normalized
+
+
 def prepare_release_publication(
     root: Path,
     package_dir: Path,
@@ -178,12 +233,27 @@ def prepare_release_publication(
             {wheel_name: package_files[wheel_name], sdist_name: package_files[sdist_name]},
         )
         validate_cyclonedx(evidence_files["source.cdx.json"], expected_component=project)
-        validate_cyclonedx(evidence_files["image.cdx.json"], expected_component=project)
-        validate_grype_report(
-            evidence_files["grype.json"],
-            expected_image=f"{project}:release-{commit}",
+        platform_records = _validate_platform_evidence(
+            evidence_files["image-platforms.json"],
+            image_name=image_name,
+            image_digest=image_digest,
+            tag=tag,
+            commit=commit,
         )
-        _validate_policy(evidence_files["policy.json"])
+        for platform, architecture in PLATFORMS.items():
+            validate_cyclonedx(
+                evidence_files[f"image-{architecture}.cdx.json"],
+                expected_component=project,
+            )
+            validate_grype_report(
+                evidence_files[f"grype-{architecture}.json"],
+                expected_image=f"{project}:release-{commit}-{architecture}",
+            )
+            _validate_policy(evidence_files[f"policy-{architecture}.json"])
+            if platform_records[platform]["architecture"] != architecture:
+                raise ReleasePublicationError(
+                    f"{evidence_files['image-platforms.json']}: platform evidence drift"
+                )
     except (ReleaseArtifactError, EvidenceValidationError) as exc:
         raise ReleasePublicationError(str(exc)) from exc
 
@@ -223,11 +293,12 @@ def prepare_release_publication(
         "image": {
             "digest": image_digest,
             "name": image_name,
+            "platforms": platform_records,
             "reference": f"{image_name}@{image_digest}",
             "tags": [tag, f"sha-{commit}"],
         },
         "project": project,
-        "schema_version": 1,
+        "schema_version": 2,
         "source_commit": commit,
         "source_repository": repository,
         "tag": tag,
@@ -245,6 +316,7 @@ def prepare_release_publication(
     return {
         "asset_count": len(checksummed),
         "image": f"{image_name}@{image_digest}",
+        "platforms": sorted(platform_records),
         "project": project,
         "status": "passed",
         "tag": tag,

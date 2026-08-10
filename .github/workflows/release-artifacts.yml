@@ -75,7 +75,7 @@ jobs:
   publish-container:
     needs: build-python-artifacts
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 55
     permissions:
       contents: read
       packages: write
@@ -84,6 +84,8 @@ jobs:
       artifact-metadata: write
     outputs:
       image-digest: ${{ steps.publish-image.outputs.digest }}
+      amd64-digest: ${{ steps.publish-image.outputs.amd64-digest }}
+      arm64-digest: ${{ steps.publish-image.outputs.arm64-digest }}
 
     steps:
       - name: Check out tagged source
@@ -96,6 +98,14 @@ jobs:
         with:
           name: mcp-client-auth-template-python-${{ github.ref_name }}
           path: build/python-artifacts
+
+      - name: Set up QEMU for ARM64
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Install checksum-verified security tools
         shell: bash
@@ -118,32 +128,43 @@ jobs:
             --source-version "$PROJECT_VERSION" \
             --output "cyclonedx-json=${EVIDENCE_DIRECTORY}/source.cdx.json"
 
-      - name: Build the release image locally
+      - name: Build both release platforms locally
         shell: bash
         run: |
           set -euo pipefail
-          docker build --tag "${COMPONENT_NAME}:release-${GITHUB_SHA}" .
+          docker buildx build \
+            --platform linux/amd64 \
+            --load \
+            --tag "${COMPONENT_NAME}:release-${GITHUB_SHA}-amd64" \
+            .
+          docker buildx build \
+            --platform linux/arm64 \
+            --load \
+            --tag "${COMPONENT_NAME}:release-${GITHUB_SHA}-arm64" \
+            .
 
-      - name: Generate image inventory and vulnerability evidence
+      - name: Generate per-platform inventory and vulnerability evidence
         shell: bash
         run: |
           set -euo pipefail
-          candidate_image="${COMPONENT_NAME}:release-${GITHUB_SHA}"
-          syft "$candidate_image" \
-            --output "cyclonedx-json=${EVIDENCE_DIRECTORY}/image.cdx.json"
-          grype "$candidate_image" \
-            --output json \
-            --file "${EVIDENCE_DIRECTORY}/grype.json"
-          python scripts/validate_security_evidence.py \
-            --source-sbom "${EVIDENCE_DIRECTORY}/source.cdx.json" \
-            --image-sbom "${EVIDENCE_DIRECTORY}/image.cdx.json" \
-            --vulnerability-report "${EVIDENCE_DIRECTORY}/grype.json" \
-            --component "$COMPONENT_NAME" \
-            --image "$candidate_image"
-          python scripts/enforce_vulnerability_policy.py \
-            --report "${EVIDENCE_DIRECTORY}/grype.json" \
-            --exceptions security/vulnerability-exceptions.json \
-            --output "${EVIDENCE_DIRECTORY}/policy.json"
+          for arch in amd64 arm64; do
+            candidate_image="${COMPONENT_NAME}:release-${GITHUB_SHA}-${arch}"
+            syft "$candidate_image" \
+              --output "cyclonedx-json=${EVIDENCE_DIRECTORY}/image-${arch}.cdx.json"
+            grype "$candidate_image" \
+              --output json \
+              --file "${EVIDENCE_DIRECTORY}/grype-${arch}.json"
+            python scripts/validate_security_evidence.py \
+              --source-sbom "${EVIDENCE_DIRECTORY}/source.cdx.json" \
+              --image-sbom "${EVIDENCE_DIRECTORY}/image-${arch}.cdx.json" \
+              --vulnerability-report "${EVIDENCE_DIRECTORY}/grype-${arch}.json" \
+              --component "$COMPONENT_NAME" \
+              --image "$candidate_image"
+            python scripts/enforce_vulnerability_policy.py \
+              --report "${EVIDENCE_DIRECTORY}/grype-${arch}.json" \
+              --exceptions security/vulnerability-exceptions.json \
+              --output "${EVIDENCE_DIRECTORY}/policy-${arch}.json"
+          done
 
       - name: Generate Python SBOM attestation
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -151,7 +172,7 @@ jobs:
           subject-checksums: build/python-artifacts/SHA256SUMS
           sbom-path: build/release-evidence/source.cdx.json
 
-      - name: Authenticate to GHCR after policy approval
+      - name: Authenticate to GHCR after both platform policies approve
         shell: bash
         env:
           GHCR_TOKEN: ${{ github.token }}
@@ -160,54 +181,121 @@ jobs:
           printf '%s' "$GHCR_TOKEN" | \
             docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
-      - name: Publish immutable image subject
+      - name: Publish immutable platform subjects and multi-platform index
         id: publish-image
         shell: bash
         run: |
           set -euo pipefail
-          candidate_image="${COMPONENT_NAME}:release-${GITHUB_SHA}"
+          mkdir -p build/multiarch
+
           version_ref="${IMAGE_NAME}:${GITHUB_REF_NAME}"
           commit_ref="${IMAGE_NAME}:sha-${GITHUB_SHA}"
 
-          if docker manifest inspect "$version_ref" >/dev/null 2>&1; then
-            echo "Refusing to overwrite existing image tag: $version_ref" >&2
-            exit 1
-          fi
-          if docker manifest inspect "$commit_ref" >/dev/null 2>&1; then
-            echo "Refusing to overwrite existing image tag: $commit_ref" >&2
-            exit 1
-          fi
+          refs=(
+            "$version_ref"
+            "$commit_ref"
+            "${version_ref}-amd64"
+            "${version_ref}-arm64"
+            "${commit_ref}-amd64"
+            "${commit_ref}-arm64"
+          )
+          for ref in "${refs[@]}"; do
+            if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+              echo "Refusing to overwrite existing image tag: $ref" >&2
+              exit 1
+            fi
+          done
 
-          docker tag "$candidate_image" "$version_ref"
-          docker tag "$candidate_image" "$commit_ref"
-          docker push "$version_ref"
-          docker push "$commit_ref"
+          for arch in amd64 arm64; do
+            candidate_image="${COMPONENT_NAME}:release-${GITHUB_SHA}-${arch}"
+            version_platform_ref="${version_ref}-${arch}"
+            commit_platform_ref="${commit_ref}-${arch}"
 
-          repository_subject="$(
-            docker image inspect "$version_ref" \
-              --format '{{range .RepoDigests}}{{println .}}{{end}}' |
-              awk -v prefix="${IMAGE_NAME}@" 'index($0, prefix) == 1 {print; exit}'
+            docker tag "$candidate_image" "$version_platform_ref"
+            docker tag "$candidate_image" "$commit_platform_ref"
+            docker push "$version_platform_ref"
+            docker push "$commit_platform_ref"
+
+            version_manifest="$(
+              docker buildx imagetools inspect "$version_platform_ref" \
+                --format '{{json .Manifest}}'
+            )"
+            commit_manifest="$(
+              docker buildx imagetools inspect "$commit_platform_ref" \
+                --format '{{json .Manifest}}'
+            )"
+            version_digest="$(
+              printf '%s' "$version_manifest" |
+                python -c 'import json,sys; print(json.load(sys.stdin)["digest"])'
+            )"
+            commit_digest="$(
+              printf '%s' "$commit_manifest" |
+                python -c 'import json,sys; print(json.load(sys.stdin)["digest"])'
+            )"
+
+            if [[ ! "$version_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Could not resolve ${arch} platform digest" >&2
+              exit 1
+            fi
+            if [[ "$version_digest" != "$commit_digest" ]]; then
+              echo "${arch} version and commit tags resolved to different digests" >&2
+              exit 1
+            fi
+            printf '%s' "$version_digest" > "build/multiarch/${arch}.digest"
+          done
+
+          amd64_digest="$(cat build/multiarch/amd64.digest)"
+          arm64_digest="$(cat build/multiarch/arm64.digest)"
+
+          docker buildx imagetools create \
+            --tag "$version_ref" \
+            --metadata-file build/multiarch/version-index.json \
+            "${IMAGE_NAME}@${amd64_digest}" \
+            "${IMAGE_NAME}@${arm64_digest}"
+
+          docker buildx imagetools create \
+            --tag "$commit_ref" \
+            --metadata-file build/multiarch/commit-index.json \
+            "${IMAGE_NAME}@${amd64_digest}" \
+            "${IMAGE_NAME}@${arm64_digest}"
+
+          digest="$(
+            python -c 'import json; print(json.load(open("build/multiarch/version-index.json"))["containerimage.descriptor"]["digest"])'
           )"
-          digest="${repository_subject#*@}"
+          commit_digest="$(
+            python -c 'import json; print(json.load(open("build/multiarch/commit-index.json"))["containerimage.descriptor"]["digest"])'
+          )"
           if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Could not resolve the pushed image digest" >&2
+            echo "Could not resolve the multi-platform image digest" >&2
             exit 1
           fi
-          commit_subject="$(
-            docker image inspect "$commit_ref" \
-              --format '{{range .RepoDigests}}{{println .}}{{end}}' |
-              awk -v prefix="${IMAGE_NAME}@" 'index($0, prefix) == 1 {print; exit}'
-          )"
-          if [[ "$commit_subject" != "${IMAGE_NAME}@${digest}" ]]; then
-            echo "Version and commit tags did not resolve to one digest" >&2
+          if [[ "$digest" != "$commit_digest" ]]; then
+            echo "Version and commit multi-platform tags resolved to different digests" >&2
             exit 1
           fi
 
-          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          docker buildx imagetools inspect "$version_ref" \
+            --format '{{json .Manifest}}' \
+            > build/multiarch/registry-manifest.json
+
+          python scripts/prepare_multiarch_image_evidence.py \
+            --manifest build/multiarch/registry-manifest.json \
+            --output "${EVIDENCE_DIRECTORY}/image-platforms.json" \
+            --image-name "$IMAGE_NAME" \
+            --index-digest "$digest" \
+            --amd64-digest "$amd64_digest" \
+            --arm64-digest "$arm64_digest" \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA"
+
           printf '%s@%s\n' "$IMAGE_NAME" "$digest" \
             > "${EVIDENCE_DIRECTORY}/image-digest.txt"
 
-      - name: Generate image build provenance
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'amd64-digest=%s\n' "$amd64_digest" >> "$GITHUB_OUTPUT"
+          printf 'arm64-digest=%s\n' "$arm64_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Generate multi-platform index build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE_NAME }}
@@ -215,12 +303,21 @@ jobs:
           push-to-registry: true
           create-storage-record: false
 
-      - name: Generate image SBOM attestation
+      - name: Generate AMD64 image SBOM attestation
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.publish-image.outputs.digest }}
-          sbom-path: build/release-evidence/image.cdx.json
+          subject-digest: ${{ steps.publish-image.outputs.amd64-digest }}
+          sbom-path: build/release-evidence/image-amd64.cdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Generate ARM64 image SBOM attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.publish-image.outputs.arm64-digest }}
+          sbom-path: build/release-evidence/image-arm64.cdx.json
           push-to-registry: true
           create-storage-record: false
 
@@ -287,8 +384,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          notes_file=".github/release-notes/${GITHUB_REF_NAME}.md"
+          test -f "$notes_file"
           gh release create "$GITHUB_REF_NAME" dist/release/* \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "${COMPONENT_NAME} ${GITHUB_REF_NAME}" \
-            --generate-notes
+            --notes-file "$notes_file"
