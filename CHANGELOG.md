@@ -36,6 +36,8 @@ pre-1.0 and remains a reference template under active development.
 
 - Made the checksum-corruption regression test deterministic so release-integrity failures are
   exercised reliably.
+- Derive the OpenTelemetry service version from installed package metadata so released telemetry
+  identifies `v0.5.0` correctly.
 
 ### Security
 
