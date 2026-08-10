@@ -87,6 +87,11 @@ State:    no protocol-level session minted
 A demo também produz um resumo JSON. Com `--json`, somente esse resumo é escrito no stdout,
 permitindo reutilização futura em CI e automação de portfólio.
 
+## Evolução containerizada
+
+O P1.7b reutiliza o mesmo cenário de evidência em Docker Compose, preservando a fronteira de
+HTTP restrita a loopback. Veja [Demo de referência com Docker Compose](COMPOSE_DEMO.pt-BR.md).
+
 ## Fronteira de segurança
 
 Esta é uma demo local de referência, não um simulador de IdP para produção:

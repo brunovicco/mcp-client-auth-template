@@ -102,6 +102,16 @@ Authorization Code + PKCE CIMD-first, `whoami` autenticado, step-up de scope via
 exata de audience incorreta e comportamento MCP `2026-07-28` sem sessão. Veja
 [Demo de referência em um comando](docs/REFERENCE_DEMO.pt-BR.md).
 
+### Demo de referência com Docker Compose
+
+Execute o mesmo cenário validado em containers usando o Server `v0.5.0` publicado por digest imutável:
+
+```bash
+./scripts/run_compose_demo.sh
+```
+
+Veja [Demo de referência com Docker Compose](docs/COMPOSE_DEMO.pt-BR.md).
+
 ## Modos de autenticação
 
 | Modo | Providers | Ciclo de vida da credencial | Uso indicado |

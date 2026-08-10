@@ -101,6 +101,16 @@ then proves CIMD-first Authorization Code + PKCE, an authenticated `whoami`, run
 through `health`, exact audience rejection, and sessionless MCP `2026-07-28` behavior. See
 [One-command reference demo](docs/REFERENCE_DEMO.md).
 
+### Docker Compose reference demo
+
+Run the same validated scenario in containers with the published Server `v0.5.0` by immutable digest:
+
+```bash
+./scripts/run_compose_demo.sh
+```
+
+See [Docker Compose reference demo](docs/COMPOSE_DEMO.md).
+
 ## Authentication modes
 
 | Mode | Providers | Credential lifecycle | Good fit |

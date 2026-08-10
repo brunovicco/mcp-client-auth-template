@@ -9,6 +9,8 @@ pre-1.0 and remains a reference template under active development.
 
 ### Added
 
+- Added P1.7b, a hardened Docker Compose reference demo that consumes the published Server
+  `v0.5.0` by immutable digest and preserves the loopback-only development boundary.
 - Added P1.7a, a one-command headless reference demo that starts the deterministic local OIDC
   provider and real companion server, proves CIMD-first Authorization Code + PKCE,
   authenticated MCP tool calls, bounded runtime scope step-up, wrong-audience rejection, and

@@ -88,6 +88,11 @@ State:    no protocol-level session minted
 The same run also emits a JSON evidence summary. With `--json`, only that summary is written to
 stdout, which makes the demo reusable by later CI and portfolio automation.
 
+## Containerized follow-up
+
+P1.7b reuses this same evidence scenario in Docker Compose while preserving the loopback-only
+HTTP development boundary. See [Docker Compose reference demo](COMPOSE_DEMO.md).
+
 ## Security boundary
 
 This is deliberately a local reference demo, not an identity-provider simulator for production:

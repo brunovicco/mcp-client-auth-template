@@ -64,7 +64,7 @@ class _RunningProcess:
 
 
 @dataclass(frozen=True)
-class _Topology:
+class ReferenceTopology:
     issuer: str
     server_url: str
 
@@ -117,10 +117,9 @@ def _resolve_server_root(explicit: Path | None, *, client_root: Path = _CLIENT_R
 
     for candidate in candidates:
         resolved = candidate.expanduser().resolve()
-        if (
-            (resolved / "pyproject.toml").is_file()
-            and (resolved / "src/mcp_server_auth_template").is_dir()
-        ):
+        if (resolved / "pyproject.toml").is_file() and (
+            resolved / "src/mcp_server_auth_template"
+        ).is_dir():
             return resolved
 
     rendered = ", ".join(str(candidate) for candidate in candidates)
@@ -174,13 +173,12 @@ def _wait_for_port(
         except OSError:
             time.sleep(0.05)
     raise DemoError(
-        f"timed out waiting for localhost:{port}\n"
-        f"{process.diagnostics() or '<no child output>'}"
+        f"timed out waiting for localhost:{port}\n{process.diagnostics() or '<no child output>'}"
     )
 
 
 @asynccontextmanager
-async def _topology(server_root: Path, *, work_dir: Path) -> AsyncIterator[_Topology]:
+async def _topology(server_root: Path, *, work_dir: Path) -> AsyncIterator[ReferenceTopology]:
     """Start the fake OIDC AS and the actual companion MCP server."""
     as_port = _free_port()
     server_port = _free_port()
@@ -250,7 +248,7 @@ async def _topology(server_root: Path, *, work_dir: Path) -> AsyncIterator[_Topo
 
         try:
             _wait_for_port(server_port, server)
-            yield _Topology(issuer=issuer, server_url=server_url)
+            yield ReferenceTopology(issuer=issuer, server_url=server_url)
         finally:
             server.stop()
     finally:
@@ -284,7 +282,7 @@ async def _json_request(
     return cast(dict[str, object], decoded)
 
 
-async def _mint_wrong_audience_token(topology: _Topology) -> str:
+async def _mint_wrong_audience_token(topology: ReferenceTopology) -> str:
     """Mint a synthetic token bound to a different resource."""
     response = await _json_request(
         "POST",
@@ -302,7 +300,7 @@ async def _mint_wrong_audience_token(topology: _Topology) -> str:
     return token
 
 
-async def _protected_request_status(topology: _Topology, token: str) -> int:
+async def _protected_request_status(topology: ReferenceTopology, token: str) -> int:
     """Exercise the server bearer boundary without exposing token contents."""
     async with httpx2.AsyncClient(follow_redirects=False, timeout=5.0) as client:
         response = await client.request(
@@ -341,7 +339,7 @@ def _modern_tool_request() -> dict[str, object]:
     }
 
 
-async def _stateless_probe(topology: _Topology, token: str) -> bool:
+async def _stateless_probe(topology: ReferenceTopology, token: str) -> bool:
     """Prove that a legacy-looking session header does not create protocol session state."""
     async with httpx2.AsyncClient(follow_redirects=False, timeout=5.0) as client:
         response = await client.request(
@@ -398,163 +396,173 @@ def _step(message: str, *, quiet: bool) -> None:
         print(f"[P1.7a] {message}", flush=True)
 
 
+async def run_reference_scenario(
+    topology: ReferenceTopology,
+    *,
+    quiet: bool,
+    execution: str,
+) -> dict[str, object]:
+    """Run the reusable P1.7 OAuth/MCP evidence scenario against ready local endpoints."""
+    _step("enabling CIMD-first interactive OAuth profile", quiet=quiet)
+    await _json_request(
+        "POST",
+        f"{topology.issuer}/__test__/configure",
+        {"client_id_metadata_document_supported": True},
+    )
+
+    settings = Settings(
+        auth_provider="generic",
+        server_url=topology.server_url,
+        scope=_REQUIRED_SCOPE,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+        generic_client_metadata_url=_CIMD_CLIENT_ID,
+    )
+    storage = InMemoryTokenStorage()
+    redirect_harness = _AuthorizationRedirectHarness()
+    oauth_provider = await build_oauth_provider(
+        settings,
+        storage=storage,
+        redirect_handler=redirect_harness.redirect,
+        callback_handler=redirect_harness.callback,
+    )
+
+    _step("authenticating headlessly and calling whoami", quiet=quiet)
+    async with (
+        httpx2.AsyncClient(
+            auth=oauth_provider,
+            follow_redirects=True,
+            timeout=30.0,
+        ) as http_client,
+        build_mcp_client(settings, http_client=http_client) as client,
+    ):
+        if client.protocol_version != _PROTOCOL_VERSION:
+            raise DemoError(
+                f"negotiated protocol {client.protocol_version!r}, expected {_PROTOCOL_VERSION!r}"
+            )
+
+        _step("proving protected tools are hidden from anonymous catalog discovery", quiet=quiet)
+        anonymous_listing = await client.list_tools(cache_mode="bypass")
+        if anonymous_listing.tools:
+            names = ", ".join(sorted(tool.name for tool in anonymous_listing.tools))
+            raise DemoError(f"anonymous tools/list unexpectedly exposed protected tools: {names}")
+
+        # This server intentionally returns an authorization-filtered catalog. The SDK v2
+        # re-runs tools/list after successful calls to discover output schemas and emits a
+        # warning when the called tool is hidden from that catalog. The demo validates the
+        # returned structured content directly below, so suppress only that exact SDK
+        # warning while preserving every other client warning/error.
+        with _SdkCatalogWarningFilter():
+            initial_identity_result = await client.call_tool("whoami")
+            initial_identity = _require_dict(
+                initial_identity_result.structured_content,
+                "initial whoami",
+            )
+            if initial_identity.get("authenticated") is not True:
+                raise DemoError("initial whoami did not report an authenticated principal")
+            if initial_identity.get("client_id") != _CIMD_CLIENT_ID:
+                raise DemoError("CIMD client ID was not preserved into the authenticated principal")
+            if initial_identity.get("scopes") != [_REQUIRED_SCOPE]:
+                raise DemoError("initial token did not contain exactly the basic MCP scope")
+
+            _step("calling health to trigger bounded 403 scope step-up", quiet=quiet)
+            health_result = await client.call_tool("health")
+            health = _require_dict(health_result.structured_content, "health")
+            if health != {"status": "ok"}:
+                raise DemoError(f"health returned unexpected content: {health}")
+
+            elevated_identity_result = await client.call_tool("whoami")
+            elevated_identity = _require_dict(
+                elevated_identity_result.structured_content,
+                "elevated whoami",
+            )
+            expected_scopes = [_REQUIRED_SCOPE, _HEALTH_SCOPE]
+            if elevated_identity.get("scopes") != expected_scopes:
+                raise DemoError(
+                    "step-up did not preserve the original scope and add the health scope"
+                )
+
+    tokens = await storage.get_tokens()
+    if tokens is None or not tokens.access_token:
+        raise DemoError("no elevated access token remained in in-memory storage")
+    expected_scope_union = f"{_REQUIRED_SCOPE} {_HEALTH_SCOPE}"
+    if tokens.scope != expected_scope_union:
+        raise DemoError(
+            f"stored elevated scope is {tokens.scope!r}, expected {expected_scope_union!r}"
+        )
+
+    state = await _json_request("GET", f"{topology.issuer}/__test__/state")
+    expected_state = {
+        "registrations": 0,
+        "authorizations": 2,
+        "token_exchanges": 2,
+        "authorization_scopes": [_REQUIRED_SCOPE, expected_scope_union],
+        "client_credentials_exchanges": 0,
+        "client_credentials_scopes": [],
+    }
+    if state != expected_state:
+        raise DemoError(f"authorization-server evidence drifted: {state}")
+
+    _step("proving exact audience binding with a wrong-resource JWT", quiet=quiet)
+    wrong_audience_token = await _mint_wrong_audience_token(topology)
+    wrong_audience_status = await _protected_request_status(
+        topology,
+        wrong_audience_token,
+    )
+    if wrong_audience_status != 401:
+        raise DemoError(f"wrong-audience token returned HTTP {wrong_audience_status}, expected 401")
+
+    _step("proving stateless MCP 2026 transport semantics", quiet=quiet)
+    stateless = await _stateless_probe(topology, tokens.access_token)
+    if not stateless:
+        raise DemoError("legacy-looking MCP session header created or exposed session state")
+
+    return {
+        "status": "passed",
+        "protocol_version": _PROTOCOL_VERSION,
+        "topology": {
+            "authorization_server": "synthetic-local-oidc",
+            "resource_server": "real-companion-server",
+            "external_credentials": False,
+            "execution": execution,
+        },
+        "interactive_oauth": {
+            "registration_mode": "cimd-first",
+            "dynamic_registrations": 0,
+            "authorizations": 2,
+            "token_exchanges": 2,
+            "initial_scopes": [_REQUIRED_SCOPE],
+            "elevated_scopes": [_REQUIRED_SCOPE, _HEALTH_SCOPE],
+        },
+        "mcp_calls": {
+            "anonymous_catalog_tools": [],
+            "protected_catalog_hidden": True,
+            "whoami_authenticated": True,
+            "health": "ok",
+            "step_up_completed": True,
+            "structured_results_validated_by_demo": True,
+        },
+        "security_evidence": {
+            "wrong_audience_status": wrong_audience_status,
+            "wrong_audience_rejected": True,
+            "stateless_transport": True,
+            "response_minted_session_id": False,
+        },
+    }
+
+
 async def _run(server_root: Path, *, quiet: bool) -> dict[str, object]:
-    """Run the complete headless reference demo and return its evidence summary."""
+    """Run P1.7a with process-managed local services and return its evidence summary."""
     with tempfile.TemporaryDirectory(prefix="mcp-p1.7a-") as temporary:
         work_dir = Path(temporary)
         _step("starting fake OIDC authorization server + real MCP server", quiet=quiet)
 
         async with _topology(server_root, work_dir=work_dir) as topology:
-            _step("enabling CIMD-first interactive OAuth profile", quiet=quiet)
-            await _json_request(
-                "POST",
-                f"{topology.issuer}/__test__/configure",
-                {"client_id_metadata_document_supported": True},
-            )
-
-            settings = Settings(
-                auth_provider="generic",
-                server_url=topology.server_url,
-                scope=_REQUIRED_SCOPE,
-                token_storage_path=None,
-                oauth_allow_insecure_loopback=True,
-                generic_client_metadata_url=_CIMD_CLIENT_ID,
-            )
-            storage = InMemoryTokenStorage()
-            redirect_harness = _AuthorizationRedirectHarness()
-            oauth_provider = await build_oauth_provider(
-                settings,
-                storage=storage,
-                redirect_handler=redirect_harness.redirect,
-                callback_handler=redirect_harness.callback,
-            )
-
-            _step("authenticating headlessly and calling whoami", quiet=quiet)
-            async with (
-                httpx2.AsyncClient(
-                    auth=oauth_provider,
-                    follow_redirects=True,
-                    timeout=30.0,
-                ) as http_client,
-                build_mcp_client(settings, http_client=http_client) as client,
-            ):
-                if client.protocol_version != _PROTOCOL_VERSION:
-                    raise DemoError(
-                        f"negotiated protocol {client.protocol_version!r}, "
-                        f"expected {_PROTOCOL_VERSION!r}"
-                    )
-
-                _step("proving protected tools are hidden from anonymous catalog discovery", quiet=quiet)
-                anonymous_listing = await client.list_tools(cache_mode="bypass")
-                if anonymous_listing.tools:
-                    names = ", ".join(sorted(tool.name for tool in anonymous_listing.tools))
-                    raise DemoError(f"anonymous tools/list unexpectedly exposed protected tools: {names}")
-
-                # This server intentionally returns an authorization-filtered catalog. The SDK v2
-                # re-runs tools/list after successful calls to discover output schemas and emits a
-                # warning when the called tool is hidden from that catalog. The demo validates the
-                # returned structured content directly below, so suppress only that exact SDK
-                # warning while preserving every other client warning/error.
-                with _SdkCatalogWarningFilter():
-                    initial_identity_result = await client.call_tool("whoami")
-                    initial_identity = _require_dict(
-                        initial_identity_result.structured_content,
-                        "initial whoami",
-                    )
-                    if initial_identity.get("authenticated") is not True:
-                        raise DemoError("initial whoami did not report an authenticated principal")
-                    if initial_identity.get("client_id") != _CIMD_CLIENT_ID:
-                        raise DemoError(
-                            "CIMD client ID was not preserved into the authenticated principal"
-                        )
-                    if initial_identity.get("scopes") != [_REQUIRED_SCOPE]:
-                        raise DemoError("initial token did not contain exactly the basic MCP scope")
-
-                    _step("calling health to trigger bounded 403 scope step-up", quiet=quiet)
-                    health_result = await client.call_tool("health")
-                    health = _require_dict(health_result.structured_content, "health")
-                    if health != {"status": "ok"}:
-                        raise DemoError(f"health returned unexpected content: {health}")
-
-                    elevated_identity_result = await client.call_tool("whoami")
-                    elevated_identity = _require_dict(
-                        elevated_identity_result.structured_content,
-                        "elevated whoami",
-                    )
-                    expected_scopes = [_REQUIRED_SCOPE, _HEALTH_SCOPE]
-                    if elevated_identity.get("scopes") != expected_scopes:
-                        raise DemoError(
-                            "step-up did not preserve the original scope and add the health scope"
-                        )
-
-            tokens = await storage.get_tokens()
-            if tokens is None or not tokens.access_token:
-                raise DemoError("no elevated access token remained in in-memory storage")
-            expected_scope_union = f"{_REQUIRED_SCOPE} {_HEALTH_SCOPE}"
-            if tokens.scope != expected_scope_union:
-                raise DemoError(
-                    f"stored elevated scope is {tokens.scope!r}, expected {expected_scope_union!r}"
-                )
-
-            state = await _json_request("GET", f"{topology.issuer}/__test__/state")
-            expected_state = {
-                "registrations": 0,
-                "authorizations": 2,
-                "token_exchanges": 2,
-                "authorization_scopes": [_REQUIRED_SCOPE, expected_scope_union],
-                "client_credentials_exchanges": 0,
-                "client_credentials_scopes": [],
-            }
-            if state != expected_state:
-                raise DemoError(f"authorization-server evidence drifted: {state}")
-
-            _step("proving exact audience binding with a wrong-resource JWT", quiet=quiet)
-            wrong_audience_token = await _mint_wrong_audience_token(topology)
-            wrong_audience_status = await _protected_request_status(
+            return await run_reference_scenario(
                 topology,
-                wrong_audience_token,
+                quiet=quiet,
+                execution="local-processes",
             )
-            if wrong_audience_status != 401:
-                raise DemoError(
-                    f"wrong-audience token returned HTTP {wrong_audience_status}, expected 401"
-                )
-
-            _step("proving stateless MCP 2026 transport semantics", quiet=quiet)
-            stateless = await _stateless_probe(topology, tokens.access_token)
-            if not stateless:
-                raise DemoError("legacy-looking MCP session header created or exposed session state")
-
-            return {
-                "status": "passed",
-                "protocol_version": _PROTOCOL_VERSION,
-                "topology": {
-                    "authorization_server": "synthetic-local-oidc",
-                    "resource_server": "real-companion-server",
-                    "external_credentials": False,
-                },
-                "interactive_oauth": {
-                    "registration_mode": "cimd-first",
-                    "dynamic_registrations": 0,
-                    "authorizations": 2,
-                    "token_exchanges": 2,
-                    "initial_scopes": [_REQUIRED_SCOPE],
-                    "elevated_scopes": [_REQUIRED_SCOPE, _HEALTH_SCOPE],
-                },
-                "mcp_calls": {
-                    "anonymous_catalog_tools": [],
-                    "protected_catalog_hidden": True,
-                    "whoami_authenticated": True,
-                    "health": "ok",
-                    "step_up_completed": True,
-                    "structured_results_validated_by_demo": True,
-                },
-                "security_evidence": {
-                    "wrong_audience_status": wrong_audience_status,
-                    "wrong_audience_rejected": True,
-                    "stateless_transport": True,
-                    "response_minted_session_id": False,
-                },
-            }
 
 
 def _parser() -> argparse.ArgumentParser:
