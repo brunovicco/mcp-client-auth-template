@@ -31,8 +31,8 @@ uv run python scripts/quality_gate.py
 
 - Run the whole gate with `uv run python scripts/quality_gate.py`; use `--list` to see all
   checks or `--check NAME` to run one in isolation while iterating. Check names: `lock`, `lint`,
-  `format`, `architecture`, `mcp`, `governance`, `loop-schema-vendor`, `loop-contracts`,
-  `typing`, `tests`, `security` (bandit), `dependencies` (pip-audit).
+  `format`, `architecture`, `mcp`, `supply-chain`, `governance`, `loop-schema-vendor`,
+  `loop-contracts`, `typing`, `tests`, `security` (bandit), `dependencies` (pip-audit).
 - Run a single test: `uv run pytest tests/unit/test_entra_client_auth.py::test_name`.
 - Run the demo end-to-end (requires a running `mcp-server-auth-template` instance and a `.env`
   copied from `.env.example`): `uv run python -m mcp_client_auth_template.entrypoints.demo_client`.
