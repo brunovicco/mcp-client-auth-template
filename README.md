@@ -43,7 +43,7 @@ safe HTTP transport. It targets the MCP **2026-07-28** reference profile and pai
 | --- | --- |
 | MCP | Python SDK `>=2.0,<3`, protocol profile `2026-07-28`, Streamable HTTP |
 | Interactive auth | Authorization Code + PKCE, RFC 8252 loopback callback, RFC 9207 issuer validation |
-| Machine auth | Draft MCP OAuth Client Credentials extension with `client_secret_basic` for generic OIDC |
+| Machine auth | Official optional MCP OAuth Client Credentials extension with `client_secret_basic` for generic OIDC |
 | Identity providers | Microsoft Entra ID or standards-compliant generic OIDC |
 | Network security | HTTPS by default, SSRF controls, DNS pinning, redirect policy, exact bearer-token destination |
 | Token handling | Hardened optional POSIX file storage for interactive mode; memory-only machine credentials/tokens |
@@ -156,6 +156,30 @@ before choosing a storage adapter.
 - real 12-scenario OAuth/MCP E2E against the companion server, including fail-closed cases;
 - synthetic local identities and keys only: normal CI never needs a real IdP or production secret;
 - ADRs record security, protocol, storage, operations, compatibility, and observability trade-offs.
+
+## MCP 2026-07-28 compliance evidence
+
+The paired templates exercise the current stateless MCP profile as executable behavior rather than
+relying on a version claim alone:
+
+- `server/discover` selects the modern protocol path and per-request `_meta` carries protocol
+  version, client identity, and capabilities without the legacy `initialize`/`initialized`
+  handshake;
+- modern requests use `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name`; the companion E2E proves
+  that legacy-looking `Mcp-Session-Id` input creates no protocol session state;
+- RFC 9728 Protected Resource Metadata drives authorization-server discovery;
+- RFC 8707 `resource` is sent through authorization and token requests, with the fake authorization
+  server binding the issued JWT audience to that resource and the companion server rejecting a
+  wrong audience;
+- generic OIDC uses CIMD first with DCR only as a compatibility fallback, and authorization
+  responses validate `iss` per RFC 9207 before code redemption;
+- runtime `403 insufficient_scope` step-up preserves prior grants and completes only the bounded
+  undispatched replay;
+- machine-to-machine access is opt-in through the official
+  `io.modelcontextprotocol/oauth-client-credentials` extension.
+
+See [Compatibility](docs/COMPATIBILITY.md) and [Cross-repository E2E](docs/E2E.md) for the
+executable matrix.
 
 ## Observability
 

@@ -44,7 +44,7 @@ autorização progressiva e transporte HTTP seguro. O alvo é o perfil de refer�
 | --- | --- |
 | MCP | Python SDK `>=2.0,<3`, perfil `2026-07-28`, Streamable HTTP |
 | Auth interativa | Authorization Code + PKCE, callback loopback RFC 8252 e validação de issuer RFC 9207 |
-| Auth de máquina | Extensão draft MCP OAuth Client Credentials com `client_secret_basic` para OIDC genérico |
+| Auth de máquina | Extensão oficial e opcional MCP OAuth Client Credentials com `client_secret_basic` para OIDC genérico |
 | Providers | Microsoft Entra ID ou OIDC genérico compatível com padrões |
 | Segurança de rede | HTTPS por padrão, controles SSRF, DNS pinning, política de redirect e destino exato do bearer |
 | Tokens | Arquivo POSIX endurecido e opcional no modo interativo; credenciais/tokens de máquina em memória |
@@ -159,6 +159,28 @@ Leia [Privacidade e tratamento de dados](docs/PRIVACY.md) antes de escolher um a
   produção;
 - ADRs registram trade-offs de segurança, protocolo, storage, operações, compatibilidade e
   observabilidade.
+
+## Evidências de conformidade com MCP 2026-07-28
+
+Os templates em conjunto exercitam o perfil MCP stateless atual como comportamento executável, em
+vez de depender apenas de uma declaração de versão:
+
+- `server/discover` seleciona o caminho moderno e `_meta` por requisição carrega versão do
+  protocolo, identidade e capacidades do cliente sem o handshake legado `initialize`/`initialized`;
+- requisições modernas usam `MCP-Protocol-Version`, `Mcp-Method` e `Mcp-Name`; o E2E do par prova que
+  uma entrada legada com `Mcp-Session-Id` não cria estado de sessão no protocolo;
+- Protected Resource Metadata RFC 9728 conduz o discovery do authorization server;
+- `resource` da RFC 8707 percorre as requisições de autorização e token; o authorization server
+  sintético vincula a audience do JWT ao recurso e o servidor companheiro rejeita audience incorreta;
+- OIDC genérico usa CIMD primeiro e mantém DCR apenas como fallback de compatibilidade, enquanto a
+  resposta de autorização valida `iss` conforme RFC 9207 antes de resgatar o code;
+- o step-up `403 insufficient_scope` em runtime preserva grants anteriores e conclui somente o replay
+  limitado da operação ainda não executada;
+- acesso máquina-a-máquina é opt-in pela extensão oficial
+  `io.modelcontextprotocol/oauth-client-credentials`.
+
+Veja [Compatibilidade](docs/COMPATIBILITY.md) e
+[E2E entre repositórios](docs/E2E.md) para a matriz executável.
 
 ## Observabilidade
 

@@ -14,6 +14,7 @@ Client-credentials mode is non-interactive and keeps acquired tokens in memory.
 
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
+from importlib.metadata import version
 from typing import cast
 
 import anyio
@@ -53,7 +54,7 @@ from mcp_client_auth_template.entrypoints.settings import Settings
 logger = structlog.get_logger(__name__)
 
 _SERVICE_NAME = "mcp-client-auth-template"
-_SERVICE_VERSION = "0.4.0"
+_SERVICE_VERSION = version("mcp-client-auth-template")
 _ENVIRONMENT = "local"
 
 

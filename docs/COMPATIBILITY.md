@@ -120,7 +120,7 @@ operation requirement. The client reauthorizes with the union of its prior grant
 scope, then the SDK repeats that undispatched request once. For Entra, both logical names are
 qualified with the configured Application ID URI and `health` requires a delegated identity.
 
-The pair also exercises the draft `io.modelcontextprotocol/oauth-client-credentials` extension
+The pair also exercises the official optional `io.modelcontextprotocol/oauth-client-credentials` extension
 with the SDK support floor. The generic client uses a pre-registered ID and
 `client_secret_basic`; the server advertises the capability, and the flow completes discovery,
 resource-bound token acquisition, `whoami`, and non-interactive scope step-up without browser,
