@@ -142,14 +142,15 @@ before choosing a storage adapter.
 
 - deterministic quality gate covering lint, format, strict Mypy, architecture, tests, coverage,
   Bandit, dependency audit, and an executable supply-chain trust baseline;
-- SHA-pinned GitHub Actions, read-only workflow permissions, weekly controlled updates, and
-  pull-request dependency/license review;
+- SHA-pinned GitHub Actions, read-only permissions by default, isolated least-privilege
+  release write scopes, weekly controlled updates, and pull-request dependency/license review;
 - CycloneDX source/runtime inventories plus checksum-verified image vulnerability evidence and a
   fail-closed, time-bounded exception gate;
 - allowlisted, byte-reproducible Python release artifacts with SHA-256 manifests and GitHub build
   provenance attestations;
-- tag-gated GitHub Releases with complete integrity evidence, CycloneDX attestations, and a GHCR
-  image published and verified by immutable digest;
+- a tag-gated publication workflow that produces GitHub Releases with complete integrity
+  evidence, CycloneDX attestations, and a policy-approved GHCR image with provenance and
+  verification by immutable digest;
 - Python 3.13/3.14 against MCP SDK 2.0.0 and the latest compatible 2.x;
 - Entra/generic OIDC across production HTTPS and explicit IPv4/IPv6 loopback profiles;
 - real 12-scenario OAuth/MCP E2E against the companion server, including fail-closed cases;

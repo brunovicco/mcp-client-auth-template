@@ -21,7 +21,9 @@ uv run python scripts/quality_gate.py
 
 ```bash
 docker build -t mcp-client-auth-template .
-docker run --rm mcp-client-auth-template
+docker run --rm \
+  --env-file .env \
+  mcp-client-auth-template
 ```
 
 `Dockerfile` is a multi-stage, uv-based build: a `builder` stage installs the locked
@@ -32,9 +34,18 @@ variables, see `.env.example`) is supplied at container-run time via the environ
 baked into the image. Adjust `.dockerignore` if new top-level files or directories need to be
 excluded from the build context.
 
+The container command is best suited to the non-interactive `client_credentials` profile. The
+interactive profile owns a system-browser handoff plus an RFC 8252 loopback callback and is
+therefore intentionally easier to run directly on the host. Any MCP resource or OIDC endpoint in
+`.env` must also be reachable from inside the container; a service running on the Docker host is
+not container-local `localhost`. Use `host.docker.internal` where supported, add an explicit host
+mapping on Linux, or place the services on the same Docker network.
+
 ## Local configuration
 
-Copy `.env.example` only when the application supports local dotenv loading. Never commit `.env` or real credentials.
+Copy `.env.example` to `.env` for local development and replace only the provider/profile values
+you need. Docker's `--env-file` passes the same variable names into the container. Never commit
+`.env` or real credentials.
 
 ## Codex
 

@@ -142,14 +142,16 @@ Leia [Privacidade e tratamento de dados](docs/PRIVACY.md) antes de escolher um a
 
 - quality gate determinístico com lint, format, Mypy estrito, arquitetura, testes, cobertura,
   Bandit, auditoria de dependências e baseline executável de confiança da supply chain;
-- GitHub Actions fixadas por SHA, permissões read-only, updates semanais controlados e revisão de
+- GitHub Actions fixadas por SHA, permissões somente leitura por padrão, escritas de release
+  isoladas e com privilégio mínimo, updates semanais controlados e revisão de
   dependências/licenças nos pull requests;
 - inventários CycloneDX de código/runtime, evidência de vulnerabilidades da imagem com checksum e
   gate fail-closed para exceções temporárias;
 - artifacts Python de release com allowlist, reprodução byte a byte, manifestos SHA-256 e
   attestations de build provenance do GitHub;
-- GitHub Releases controladas por tag, com evidência completa de integridade, attestations
-  CycloneDX e imagem GHCR publicada e verificada por digest imutável;
+- workflow de publicação controlado por tag que produz GitHub Releases com evidência completa
+  de integridade e attestations CycloneDX, e publica a imagem GHCR aprovada pela política com
+  provenance e verificação por digest imutável;
 - Python 3.13/3.14 contra MCP SDK 2.0.0 e a versão 2.x compatível mais recente;
 - Entra/OIDC genérico em HTTPS de produção e perfis locais IPv4/IPv6 explicitamente habilitados;
 - E2E OAuth/MCP real de 12 cenários contra o servidor companheiro, incluindo casos fail-closed;
