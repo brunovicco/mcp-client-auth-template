@@ -7,9 +7,11 @@ pre-1.0 and remains a reference template under active development.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-10
+
 ### Added
 
-- Added P1.7d public-repository polish: concise EN/PT-BR landing pages, executable reference-demo CI, visual-evidence slots, and repository-hygiene regression coverage.
+- Added P1.7d public-repository polish: concise EN/PT-BR landing pages, executable reference-demo CI, real visual evidence, and repository-hygiene regression coverage.
 - Removed checked-in coding-agent/Codex scaffolding and Codex-only MCP configuration policy so the public tree contains project-owned runtime, tests, CI and documentation.
 - Added P1.7c, an optional local observability overlay with `a2a-otel-kit`,
   OpenTelemetry Collector, Tempo, Grafana, positive Collector receipt verification,
@@ -21,6 +23,19 @@ pre-1.0 and remains a reference template under active development.
   provider and real companion server, proves CIMD-first Authorization Code + PKCE,
   authenticated MCP tool calls, bounded runtime scope step-up, wrong-audience rejection, and
   stateless MCP `2026-07-28` behavior without external credentials or a browser.
+
+### Changed
+
+- Public package version is now `0.6.0`.
+- Secure container publication now produces one OCI index for `linux/amd64` and `linux/arm64`, with immutable architecture-specific version/commit aliases.
+- GitHub Releases use the curated `.github/release-notes/v0.6.0.md` file.
+
+### Security
+
+- AMD64 and ARM64 production images are independently inventoried, scanned, and policy-approved before GHCR authentication.
+- The exact scanned local platform images are pushed; no post-scan rebuild is used for publication.
+- `image-platforms.json` binds the final OCI index digest to the exact scanned platform digests, and the release validator rejects platform drift.
+- The final index receives build provenance and each platform manifest receives its own CycloneDX SBOM attestation.
 
 ## [0.5.0] - 2026-08-09
 
@@ -145,7 +160,8 @@ pre-1.0 and remains a reference template under active development.
   and durability checks.
 - HTTP loopback development requires explicit opt-in; production remains HTTPS-only.
 
-[Unreleased]: https://github.com/brunovicco/mcp-client-auth-template/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/brunovicco/mcp-client-auth-template/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/brunovicco/mcp-client-auth-template/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/brunovicco/mcp-client-auth-template/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/brunovicco/mcp-client-auth-template/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/brunovicco/mcp-client-auth-template/releases/tag/v0.3.0

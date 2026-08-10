@@ -19,6 +19,8 @@ VERSION = "1.2.3"
 REPOSITORY = "brunovicco/example-package"
 COMMIT = "b" * 40
 DIGEST = f"sha256:{'a' * 64}"
+AMD64_DIGEST = f"sha256:{'c' * 64}"
+ARM64_DIGEST = f"sha256:{'d' * 64}"
 IMAGE_NAME = f"ghcr.io/{REPOSITORY}"
 
 
@@ -81,6 +83,16 @@ def _sbom() -> dict[str, object]:
     }
 
 
+def _policy() -> dict[str, object]:
+    return {
+        "actionable_findings": 0,
+        "approved_exceptions": [],
+        "effective_date": "2026-08-10",
+        "status": "passed",
+        "unfixed_high_critical_findings": 0,
+    }
+
+
 def _inputs(root: Path) -> tuple[Path, Path, Path]:
     _project(root)
     packages = root / "packages"
@@ -97,25 +109,59 @@ def _inputs(root: Path) -> tuple[Path, Path, Path]:
         f"{_sha256(wheel)}  {wheel.name}\n{_sha256(sdist)}  {sdist.name}\n",
         encoding="ascii",
     )
-    for name in ("source.cdx.json", "image.cdx.json"):
-        (evidence / name).write_text(json.dumps(_sbom()), encoding="utf-8")
-    report = {
-        "descriptor": {"name": "grype", "version": "0.116.1"},
-        "matches": [],
-        "source": {
-            "type": "image",
-            "target": {"userInput": f"{PROJECT}:release-{COMMIT}"},
+    (evidence / "source.cdx.json").write_text(json.dumps(_sbom()), encoding="utf-8")
+
+    platform_digests = {"amd64": AMD64_DIGEST, "arm64": ARM64_DIGEST}
+    for architecture in platform_digests:
+        (evidence / f"image-{architecture}.cdx.json").write_text(
+            json.dumps(_sbom()),
+            encoding="utf-8",
+        )
+        report = {
+            "descriptor": {"name": "grype", "version": "0.116.1"},
+            "matches": [],
+            "source": {
+                "type": "image",
+                "target": {"userInput": f"{PROJECT}:release-{COMMIT}-{architecture}"},
+            },
+        }
+        (evidence / f"grype-{architecture}.json").write_text(
+            json.dumps(report),
+            encoding="utf-8",
+        )
+        (evidence / f"policy-{architecture}.json").write_text(
+            json.dumps(_policy()),
+            encoding="utf-8",
+        )
+
+    platforms = {
+        "index": {
+            "digest": DIGEST,
+            "reference": f"{IMAGE_NAME}@{DIGEST}",
+            "tags": [f"v{VERSION}", f"sha-{COMMIT}"],
         },
+        "platforms": {
+            "linux/amd64": {
+                "architecture": "amd64",
+                "digest": AMD64_DIGEST,
+                "os": "linux",
+                "reference": f"{IMAGE_NAME}@{AMD64_DIGEST}",
+                "tags": [f"v{VERSION}-amd64", f"sha-{COMMIT}-amd64"],
+            },
+            "linux/arm64": {
+                "architecture": "arm64",
+                "digest": ARM64_DIGEST,
+                "os": "linux",
+                "reference": f"{IMAGE_NAME}@{ARM64_DIGEST}",
+                "tags": [f"v{VERSION}-arm64", f"sha-{COMMIT}-arm64"],
+            },
+        },
+        "schema_version": 1,
     }
-    (evidence / "grype.json").write_text(json.dumps(report), encoding="utf-8")
-    policy = {
-        "actionable_findings": 0,
-        "approved_exceptions": [],
-        "effective_date": "2026-08-09",
-        "status": "passed",
-        "unfixed_high_critical_findings": 0,
-    }
-    (evidence / "policy.json").write_text(json.dumps(policy), encoding="utf-8")
+    (evidence / "image-platforms.json").write_text(
+        json.dumps(platforms),
+        encoding="utf-8",
+    )
     (evidence / "image-digest.txt").write_text(
         f"{IMAGE_NAME}@{DIGEST}\n",
         encoding="ascii",
@@ -141,12 +187,15 @@ def _prepare(root: Path) -> dict[str, object]:
 def test_valid_release_emits_manifest_and_complete_checksums(tmp_path: Path) -> None:
     result = _prepare(tmp_path)
 
-    assert result["asset_count"] == 9
+    assert result["asset_count"] == 13
     assert result["status"] == "passed"
+    assert result["platforms"] == ["linux/amd64", "linux/arm64"]
     manifest = json.loads((tmp_path / "release/release-manifest.json").read_text())
+    assert manifest["schema_version"] == 2
     assert manifest["image"]["reference"] == f"{IMAGE_NAME}@{DIGEST}"
+    assert set(manifest["image"]["platforms"]) == {"linux/amd64", "linux/arm64"}
     assert manifest["source_commit"] == COMMIT
-    assert len((tmp_path / "release/RELEASE_SHA256SUMS").read_text().splitlines()) == 9
+    assert len((tmp_path / "release/RELEASE_SHA256SUMS").read_text().splitlines()) == 13
 
 
 def test_unexpected_evidence_file_is_rejected(tmp_path: Path) -> None:
@@ -191,7 +240,7 @@ def test_package_checksum_mismatch_is_rejected(tmp_path: Path) -> None:
 def test_image_subject_must_match_published_digest(tmp_path: Path) -> None:
     packages, evidence, output = _inputs(tmp_path)
     (evidence / "image-digest.txt").write_text(
-        f"{IMAGE_NAME}@sha256:{'c' * 64}\n",
+        f"{IMAGE_NAME}@sha256:{'e' * 64}\n",
         encoding="ascii",
     )
 
@@ -209,9 +258,30 @@ def test_image_subject_must_match_published_digest(tmp_path: Path) -> None:
         )
 
 
-def test_failed_vulnerability_policy_is_rejected(tmp_path: Path) -> None:
+def test_platform_digest_drift_is_rejected(tmp_path: Path) -> None:
     packages, evidence, output = _inputs(tmp_path)
-    policy_path = evidence / "policy.json"
+    path = evidence / "image-platforms.json"
+    document = json.loads(path.read_text())
+    document["platforms"]["linux/arm64"]["digest"] = f"sha256:{'f' * 64}"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ReleasePublicationError, match="invalid platform reference"):
+        prepare_release_publication(
+            tmp_path,
+            packages,
+            evidence,
+            output,
+            tag=f"v{VERSION}",
+            repository=REPOSITORY,
+            commit=COMMIT,
+            image_name=IMAGE_NAME,
+            image_digest=DIGEST,
+        )
+
+
+def test_failed_platform_policy_is_rejected(tmp_path: Path) -> None:
+    packages, evidence, output = _inputs(tmp_path)
+    policy_path = evidence / "policy-arm64.json"
     policy = json.loads(policy_path.read_text())
     policy["status"] = "failed"
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
@@ -250,7 +320,7 @@ def test_release_tag_must_match_project_version(tmp_path: Path) -> None:
 def test_evidence_symlinks_are_rejected(tmp_path: Path) -> None:
     packages, evidence, output = _inputs(tmp_path)
     (evidence / "source.cdx.json").unlink()
-    (evidence / "source.cdx.json").symlink_to(evidence / "image.cdx.json")
+    (evidence / "source.cdx.json").symlink_to(evidence / "image-amd64.cdx.json")
 
     with pytest.raises(ReleasePublicationError, match="symbolic links"):
         prepare_release_publication(

@@ -31,6 +31,7 @@ REQUIRED_FILES = (
     Path("docs/adr/0020-actionable-vulnerability-exceptions.md"),
     Path("docs/adr/0021-reproducible-release-provenance.md"),
     Path("docs/adr/0022-secure-release-publication.md"),
+    Path("docs/adr/0023-multi-platform-release-publication.md"),
     Path("docs/SUPPLY_CHAIN.md"),
     Path("scripts/enforce_vulnerability_policy.py"),
     Path("scripts/install_security_tools.sh"),
@@ -248,6 +249,14 @@ def _validate_baseline_configuration(root: Path) -> list[str]:
             "artifact metadata permission": "artifact-metadata: write",
             "package SBOM attestation": "subject-checksums: build/python-artifacts/SHA256SUMS",
             "image digest subject": "subject-digest:",
+            "QEMU setup": "docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3",
+            "Buildx setup": "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
+            "AMD64 release build": "--platform linux/amd64",
+            "ARM64 release build": "--platform linux/arm64",
+            "AMD64 image evidence": "image-amd64.cdx.json",
+            "ARM64 image evidence": "image-arm64.cdx.json",
+            "multi-platform image contract": "image-platforms.json",
+            "OCI index assembly": "docker buildx imagetools create",
             "registry attestation": "push-to-registry: true",
             "pre-publication vulnerability policy": "enforce_vulnerability_policy.py",
             "GHCR publication": "docker push",
@@ -265,14 +274,26 @@ def _validate_baseline_configuration(root: Path) -> list[str]:
                 errors.append(f"release-artifacts.yml: missing {control}")
         if text.count("uv build --build-constraints") != 2:
             errors.append("release-artifacts.yml: exactly two reproducibility builds are required")
-        if text.count("sbom-path:") != 2:
-            errors.append("release-artifacts.yml: Python and image SBOM attestations are required")
-        if text.count("push-to-registry: true") != 2:
-            errors.append("release-artifacts.yml: both image attestations must be stored in GHCR")
-        if text.count("create-storage-record: false") != 2:
+        if text.count("sbom-path:") != 3:
             errors.append(
-                "release-artifacts.yml: user-owned repositories must disable storage records"
+                "release-artifacts.yml: package plus AMD64/ARM64 SBOM attestations are required"
             )
+        if text.count("push-to-registry: true") != 3:
+            errors.append(
+                "release-artifacts.yml: index provenance and both platform SBOM attestations "
+                "must use GHCR"
+            )
+        if text.count("create-storage-record: false") != 3:
+            errors.append(
+                "release-artifacts.yml: all registry attestations must disable storage records"
+            )
+        if text.count("enforce_vulnerability_policy.py") != 1:
+            errors.append(
+                "release-artifacts.yml: one looped per-platform vulnerability-policy command "
+                "is required"
+            )
+        if text.count("docker buildx imagetools create") != 2:
+            errors.append("release-artifacts.yml: version and commit OCI indexes are both required")
         if text.count("contents: write") != 1 or text.count("packages: write") != 1:
             errors.append(
                 "release-artifacts.yml: release and registry writes must each exist in one job"
@@ -286,7 +307,7 @@ def _validate_baseline_configuration(root: Path) -> list[str]:
         push = text.find("docker push")
         if min(policy, login, push) < 0 or not policy < login < push:
             errors.append(
-                "release-artifacts.yml: vulnerability policy must pass before registry login/push"
+                "release-artifacts.yml: both plat policies must execute before registry login/push"
             )
 
     publication_path = root / "scripts/prepare_release_publication.py"
@@ -296,9 +317,13 @@ def _validate_baseline_configuration(root: Path) -> list[str]:
             "complete release checksums": "RELEASE_SHA256SUMS",
             "machine-readable release manifest": "release-manifest.json",
             "source SBOM": "source.cdx.json",
-            "image SBOM": "image.cdx.json",
-            "complete vulnerability report": "grype.json",
-            "vulnerability policy decision": "policy.json",
+            "AMD64 image SBOM": "image-amd64.cdx.json",
+            "ARM64 image SBOM": "image-arm64.cdx.json",
+            "AMD64 vulnerability report": "grype-amd64.json",
+            "ARM64 vulnerability report": "grype-arm64.json",
+            "AMD64 policy decision": "policy-amd64.json",
+            "ARM64 policy decision": "policy-arm64.json",
+            "multi-platform image mapping": "image-platforms.json",
             "immutable image subject": "image-digest.txt",
         }
         for control, marker in required_publication_controls.items():

@@ -22,7 +22,7 @@ Execute:
 O server é consumido por digest imutável:
 
 ```text
-ghcr.io/brunovicco/mcp-server-auth-template@sha256:39d50ff235df634ef6c4b0d8a4cdef4c4c3be00094fce464eabafea88f216d9a
+ghcr.io/brunovicco/mcp-server-auth-template@sha256:4a220992b5df2382b2f821713b8b4c840469e4465395cbdeb1349dee0f8a1110
 ```
 
 A demo reutiliza exatamente o cenário do P1.7a e prova MCP `2026-07-28`, Authorization Code + PKCE

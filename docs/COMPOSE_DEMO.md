@@ -22,7 +22,7 @@ Run:
 The server is consumed by immutable digest:
 
 ```text
-ghcr.io/brunovicco/mcp-server-auth-template@sha256:39d50ff235df634ef6c4b0d8a4cdef4c4c3be00094fce464eabafea88f216d9a
+ghcr.io/brunovicco/mcp-server-auth-template@sha256:4a220992b5df2382b2f821713b8b4c840469e4465395cbdeb1349dee0f8a1110
 ```
 
 The demo reuses the exact P1.7a scenario and proves MCP `2026-07-28`, CIMD-first Authorization
