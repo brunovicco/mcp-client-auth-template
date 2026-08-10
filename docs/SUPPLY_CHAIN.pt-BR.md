@@ -1,16 +1,15 @@
 # Baseline de confiança da supply chain
 
-Este documento define os controles P1.6 para confiança em dependências, CI e inventário de software.
-Ele é uma política do projeto e apoio para revisão, não uma certificação. Attestations de artefatos,
-assinatura de releases e provenance de containers ficam, de forma intencional, para os próximos
-incrementos da P1.6.
+Este documento define os controles P1.6 para confiança em dependências, CI, inventário de software,
+provenance de artifacts e integridade de releases. Ele é uma política do projeto e apoio para
+revisão, não uma certificação.
 
 ## Threat model e controles
 
-| Ameaça | Controle P1.6a | Risco residual |
+| Ameaça | Controle P1.6 | Risco residual |
 | --- | --- | --- |
 | Uma GitHub Action mutável ou comprometida executa no CI | Toda action de terceiros usa o SHA completo do commit; o quality gate rejeita referências mutáveis | Um commit confiável e fixado ainda pode conter defeito ou comprometimento |
-| O token do workflow tem autoridade maior que a necessária | Todo workflow declara permissões explícitas; escritas ficam limitadas ao job isolado de provenance acionado por tag | A confiança no runner, no OIDC do GitHub e na plataforma permanece |
+| O token do workflow tem autoridade maior que a necessária | Todo workflow declara permissões explícitas; escritas de release, registry e attestation ficam isoladas por job | A confiança no runner, no OIDC do GitHub e na plataforma permanece |
 | Uma dependência vulnerável entra em uma atualização rotineira | Dependency Review bloqueia advisories high/critical novos reconhecidos; `pip-audit` verifica o ambiente travado | A cobertura do ecossistema e a base de advisories podem atrasar uma divulgação recente |
 | Dependências ficam desatualizadas | Dependabot verifica Python/uv e GitHub Actions semanalmente com volume limitado de PRs | Maintainers ainda precisam revisar e integrar updates seguros |
 | Uma dependência cria obrigações de licença incompatíveis | Dependency Review nega novos pacotes AGPL-3.0-only e GPL-3.0-only; toda licença nova é revisada | A detecção automática de licença pode ser incompleta ou incorreta |
@@ -34,10 +33,10 @@ dados desconhecidos ou ambíguos precisam ser resolvidos antes do merge.
 - Fixe actions remotas e workflows reutilizáveis no SHA completo de 40 caracteres, mantenha um
   comentário da release e desabilite a persistência das credenciais do checkout.
 - Fixe actions em container pelo digest SHA-256. Actions locais podem usar path relativo.
-- Mantenha os workflows somente leitura por padrão. Apenas o job de provenance acionado por tag
-  pode solicitar escrita em `id-token`, `attestations` e `artifact-metadata`; ele não pode escrever
-  em contents, packages, releases ou registries. Qualquer nova escrita exige atualização documentada
-  do threat model e mudança da política executável no mesmo PR.
+- Mantenha os workflows somente leitura por padrão. No workflow de release acionado por tag, o
+  build Python pode escrever attestations, o job do container pode escrever no GHCR e em
+  attestations, e o job final pode escrever contents da GitHub Release. Nenhum job recebe as três
+  autoridades. Qualquer nova escrita exige atualização do threat model e da política executável.
 - Não exponha secrets do repositório a código não confiável de pull requests. Updates de supply
   chain não recebem auto-merge.
 - Revise update de action como código executável: valide a release upstream e o intervalo de
@@ -79,13 +78,12 @@ a execução dos binários. O artifact é retido por 14 dias e contém os dois S
 completo e o resultado minimizado da política. Ele não contém credenciais, conteúdo de código,
 dados de requisição, tokens, prompts ou payloads MCP.
 
-A evidência da P1.6b permanece como artifact do Actions. A P1.6c adiciona build provenance dos
-pacotes; publicar SBOMs em releases e vinculá-los a digests imutáveis de imagens continua como
-trabalho da P1.6d.
+A evidência P1.6b de pull request/`main` permanece como artifact do Actions. A publicação por tag
+regenera e revalida a mesma evidência antes de publicar a imagem da release.
 
 ## Artifacts de release reproduzíveis e provenance (P1.6c)
 
-O workflow `release-artifact-provenance` executa somente após o push de uma tag `v*`. Ele exige que
+O workflow `secure-release-publication` executa somente após o push de uma tag `v*`. Ele exige que
 a tag corresponda à versão em `pyproject.toml`, cria wheel e source distribution duas vezes com
 `SOURCE_DATE_EPOCH` derivado do commit e exige igualdade byte a byte entre os dois conjuntos. O
 validador de release verifica paths dos archives, metadata do pacote, nomes esperados e uma fronteira
@@ -102,10 +100,9 @@ credenciais e automação não relacionada entrem no source release. O validador
 mesma fronteira de forma independente, portanto drift de configuração falha de forma fechada.
 
 Depois da validação, os subjects SHA-256 recebem attestations de build provenance GitHub/Sigstore
-por uma `actions/attest` fixada por SHA. O job isolado pode emitir identidade OIDC e escrever
+por uma `actions/attest` fixada por SHA. O job Python pode emitir identidade OIDC e escrever
 attestations e metadata de artifacts, mas não pode escrever em contents, packages, releases ou
-registries. Wheel, sdist e manifesto de checksums permanecem como artifact do workflow por 30 dias.
-Valide arquivos baixados com:
+registries.
 
 ```bash
 sha256sum --check SHA256SUMS
@@ -113,9 +110,50 @@ gh attestation verify mcp_client_auth_template-<versao>-py3-none-any.whl \
   --repo brunovicco/mcp-client-auth-template
 ```
 
-A P1.6c não cria nem altera uma GitHub Release. Publicar esses arquivos como release assets,
-adicionar attestations de SBOM e publicar imagem de container imutável por digest continuam como
-trabalho da P1.6d.
+## Publicação segura de release e provenance de container (P1.6d)
+
+O mesmo workflow de tag agora separa três autoridades. `build-python-artifacts` cria e atesta os
+pacotes reproduzíveis. `publish-container` constrói a imagem de produção localmente, gera SBOMs
+CycloneDX de source/imagem, registra o relatório Grype completo e aplica a política fail-closed de
+exceções antes de receber um token do GHCR. `publish-github-release` recebe apenas
+`contents: write` e só executa depois do sucesso dos outros jobs.
+
+A imagem local aprovada recebe tags da versão e do commit completo e então é enviada uma vez. O
+workflow recusa sobrescrever qualquer tag, registra o subject `ghcr.io/...@sha256:...` resultante e
+cria attestations de build provenance e SBOM CycloneDX para esse digest no GHCR. Tags servem para
+descoberta; deploy e verificação devem usar o digest de `image-digest.txt`.
+
+A GitHub Release contém wheel, sdist, manifesto de checksums dos pacotes, SBOMs de source/imagem,
+relatório Grype completo, resultado da política, subject da imagem, `release-manifest.json` e
+`RELEASE_SHA256SUMS`. O validador final aceita somente esse conjunto, revalida archives e checksums,
+identidades das evidências e status da política, e vincula tag, commit, repositório e digest antes de
+`gh release create --verify-tag`. Publicação no PyPI não faz parte da P1.6d.
+
+A visibilidade do package no GHCR é uma configuração administrativa, não uma permissão do workflow.
+Depois da primeira publicação, torne o package de container público caso o consumo anônimo seja
+desejado; até lá, `docker pull` e a verificação OCI exigem autenticação no GHCR. O workflow não
+altera visibilidade de packages de forma deliberada.
+
+Verifique uma release antes do uso:
+
+```bash
+gh release download v<versao> \
+  --repo brunovicco/mcp-client-auth-template \
+  --dir release
+(cd release && sha256sum --check RELEASE_SHA256SUMS)
+gh attestation verify release/mcp_client_auth_template-<versao>-py3-none-any.whl \
+  --repo brunovicco/mcp-client-auth-template
+image="$(cat release/image-digest.txt)"
+gh attestation verify "oci://${image}" \
+  --repo brunovicco/mcp-client-auth-template
+docker pull "$image"
+```
+
+Para uma versão coordenada server/client, publique e verifique primeiro o server. Publique a tag do
+client somente depois que os assets e o digest do server forem aprovados. Essa ordem evita anunciar
+um client cujo companion server esteja incompleto e não cria dependência de CI entre repositórios.
+A [ADR-0022](adr/0022-secure-release-publication.md) registra a separação de autoridade, o modo de
+falha residual e a cerimônia de release.
 
 ## Evidência executável
 

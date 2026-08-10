@@ -1,4 +1,4 @@
-name: release-artifact-provenance
+name: secure-release-publication
 
 on:
   push:
@@ -8,8 +8,19 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: secure-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  COMPONENT_NAME: mcp-client-auth-template
+  EVIDENCE_DIRECTORY: build/release-evidence
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  SYFT_CHECK_FOR_APP_UPDATE: "false"
+  GRYPE_CHECK_FOR_APP_UPDATE: "false"
+
 jobs:
-  build-and-attest:
+  build-python-artifacts:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -47,16 +58,237 @@ jobs:
             --output dist \
             --tag "$GITHUB_REF_NAME"
 
-      - name: Generate GitHub build provenance
+      - name: Generate Python build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: dist/SHA256SUMS
 
-      - name: Retain release artifacts and checksums
+      - name: Retain validated Python artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mcp-client-auth-template-release-${{ github.ref_name }}
+          name: mcp-client-auth-template-python-${{ github.ref_name }}
           path: dist/
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
+
+  publish-container:
+    needs: build-python-artifacts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      image-digest: ${{ steps.publish-image.outputs.digest }}
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Restore validated Python artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mcp-client-auth-template-python-${{ github.ref_name }}
+          path: build/python-artifacts
+
+      - name: Install checksum-verified security tools
+        shell: bash
+        run: |
+          bash scripts/install_security_tools.sh "${RUNNER_TEMP}/security-tools"
+          echo "${RUNNER_TEMP}/security-tools" >> "$GITHUB_PATH"
+
+      - name: Generate source CycloneDX SBOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIRECTORY"
+          PROJECT_VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          syft dir:. \
+            --select-catalogers python \
+            --exclude ./.git \
+            --exclude ./.venv \
+            --exclude ./build \
+            --source-name "$COMPONENT_NAME" \
+            --source-version "$PROJECT_VERSION" \
+            --output "cyclonedx-json=${EVIDENCE_DIRECTORY}/source.cdx.json"
+
+      - name: Build the release image locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --tag "${COMPONENT_NAME}:release-${GITHUB_SHA}" .
+
+      - name: Generate image inventory and vulnerability evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_image="${COMPONENT_NAME}:release-${GITHUB_SHA}"
+          syft "$candidate_image" \
+            --output "cyclonedx-json=${EVIDENCE_DIRECTORY}/image.cdx.json"
+          grype "$candidate_image" \
+            --output json \
+            --file "${EVIDENCE_DIRECTORY}/grype.json"
+          python scripts/validate_security_evidence.py \
+            --source-sbom "${EVIDENCE_DIRECTORY}/source.cdx.json" \
+            --image-sbom "${EVIDENCE_DIRECTORY}/image.cdx.json" \
+            --vulnerability-report "${EVIDENCE_DIRECTORY}/grype.json" \
+            --component "$COMPONENT_NAME" \
+            --image "$candidate_image"
+          python scripts/enforce_vulnerability_policy.py \
+            --report "${EVIDENCE_DIRECTORY}/grype.json" \
+            --exceptions security/vulnerability-exceptions.json \
+            --output "${EVIDENCE_DIRECTORY}/policy.json"
+
+      - name: Generate Python SBOM attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: build/python-artifacts/SHA256SUMS
+          sbom-path: build/release-evidence/source.cdx.json
+
+      - name: Authenticate to GHCR after policy approval
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | \
+            docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Publish immutable image subject
+        id: publish-image
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_image="${COMPONENT_NAME}:release-${GITHUB_SHA}"
+          version_ref="${IMAGE_NAME}:${GITHUB_REF_NAME}"
+          commit_ref="${IMAGE_NAME}:sha-${GITHUB_SHA}"
+
+          if docker manifest inspect "$version_ref" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing image tag: $version_ref" >&2
+            exit 1
+          fi
+          if docker manifest inspect "$commit_ref" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing image tag: $commit_ref" >&2
+            exit 1
+          fi
+
+          docker tag "$candidate_image" "$version_ref"
+          docker tag "$candidate_image" "$commit_ref"
+          docker push "$version_ref"
+          docker push "$commit_ref"
+
+          repository_subject="$(
+            docker image inspect "$version_ref" \
+              --format '{{range .RepoDigests}}{{println .}}{{end}}' |
+              awk -v prefix="${IMAGE_NAME}@" 'index($0, prefix) == 1 {print; exit}'
+          )"
+          digest="${repository_subject#*@}"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Could not resolve the pushed image digest" >&2
+            exit 1
+          fi
+          commit_subject="$(
+            docker image inspect "$commit_ref" \
+              --format '{{range .RepoDigests}}{{println .}}{{end}}' |
+              awk -v prefix="${IMAGE_NAME}@" 'index($0, prefix) == 1 {print; exit}'
+          )"
+          if [[ "$commit_subject" != "${IMAGE_NAME}@${digest}" ]]; then
+            echo "Version and commit tags did not resolve to one digest" >&2
+            exit 1
+          fi
+
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf '%s@%s\n' "$IMAGE_NAME" "$digest" \
+            > "${EVIDENCE_DIRECTORY}/image-digest.txt"
+
+      - name: Generate image build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.publish-image.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Generate image SBOM attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.publish-image.outputs.digest }}
+          sbom-path: build/release-evidence/image.cdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Remove registry credentials
+        if: always()
+        run: docker logout ghcr.io || true
+
+      - name: Retain release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mcp-client-auth-template-evidence-${{ github.ref_name }}
+          path: build/release-evidence/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9
+
+  publish-github-release:
+    needs:
+      - build-python-artifacts
+      - publish-container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Restore validated Python artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mcp-client-auth-template-python-${{ github.ref_name }}
+          path: build/publication/packages
+
+      - name: Restore validated release evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mcp-client-auth-template-evidence-${{ github.ref_name }}
+          path: build/publication/evidence
+
+      - name: Validate the complete public release
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ needs.publish-container.outputs.image-digest }}
+        run: |
+          set -euo pipefail
+          python -m scripts.prepare_release_publication \
+            --package-dir build/publication/packages \
+            --evidence-dir build/publication/evidence \
+            --output dist/release \
+            --tag "$GITHUB_REF_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA" \
+            --image-name "$IMAGE_NAME" \
+            --image-digest "$IMAGE_DIGEST"
+
+      - name: Publish immutable GitHub Release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" dist/release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "${COMPONENT_NAME} ${GITHUB_REF_NAME}" \
+            --generate-notes

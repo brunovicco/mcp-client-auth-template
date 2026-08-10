@@ -7,6 +7,18 @@ pre-1.0 and remains a reference template under active development.
 
 ## [Unreleased]
 
+### Added
+
+- Added tag-gated GitHub Release publication with reproducible Python packages, complete checksum
+  coverage, CycloneDX inventories, vulnerability evidence, and a machine-readable release manifest.
+- Added GHCR publication for the policy-approved production image, identified by immutable digest
+  and accompanied by build-provenance and SBOM attestations.
+
+### Security
+
+- Isolated attestation, registry, and GitHub Release write authority across separate jobs and made
+  vulnerability-policy approval a prerequisite for GHCR authentication and publication.
+
 ## [0.4.0] - 2026-08-09
 
 ### Changed

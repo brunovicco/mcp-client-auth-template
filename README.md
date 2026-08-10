@@ -148,6 +148,8 @@ before choosing a storage adapter.
   fail-closed, time-bounded exception gate;
 - allowlisted, byte-reproducible Python release artifacts with SHA-256 manifests and GitHub build
   provenance attestations;
+- tag-gated GitHub Releases with complete integrity evidence, CycloneDX attestations, and a GHCR
+  image published and verified by immutable digest;
 - Python 3.13/3.14 against MCP SDK 2.0.0 and the latest compatible 2.x;
 - Entra/generic OIDC across production HTTPS and explicit IPv4/IPv6 loopback profiles;
 - real 12-scenario OAuth/MCP E2E against the companion server, including fail-closed cases;
