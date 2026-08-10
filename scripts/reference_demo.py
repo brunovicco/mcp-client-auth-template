@@ -18,6 +18,8 @@ from typing import TextIO, cast
 from urllib.parse import parse_qs, urlsplit
 
 import httpx2
+from a2a_otel_kit.adapters.mcp import TracingAsyncTransport
+from a2a_otel_kit.entrypoints.observability import Observability
 from mcp.shared.auth import AuthorizationCodeResult
 
 from mcp_client_auth_template.adapters.token_storage import InMemoryTokenStorage
@@ -401,6 +403,7 @@ async def run_reference_scenario(
     *,
     quiet: bool,
     execution: str,
+    observability: Observability | None = None,
 ) -> dict[str, object]:
     """Run the reusable P1.7 OAuth/MCP evidence scenario against ready local endpoints."""
     _step("enabling CIMD-first interactive OAuth profile", quiet=quiet)
@@ -428,11 +431,19 @@ async def run_reference_scenario(
     )
 
     _step("authenticating headlessly and calling whoami", quiet=quiet)
+    base_transport: httpx2.AsyncBaseTransport = httpx2.AsyncHTTPTransport(retries=0)
+    transport = (
+        TracingAsyncTransport.wrap(base_transport, observability)
+        if observability is not None
+        else base_transport
+    )
+
     async with (
         httpx2.AsyncClient(
             auth=oauth_provider,
             follow_redirects=True,
             timeout=30.0,
+            transport=transport,
         ) as http_client,
         build_mcp_client(settings, http_client=http_client) as client,
     ):

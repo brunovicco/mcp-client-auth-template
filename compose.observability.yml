@@ -1,0 +1,111 @@
+services:
+  server:
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      A2A_OTEL_ENABLED: "true"
+      A2A_OTEL_OTLP_ENDPOINT: "http://127.0.0.1:4318/v1/traces"
+      A2A_OTEL_LOG_FORMAT: "console"
+
+  demo:
+    environment:
+      A2A_OTEL_ENABLED: "true"
+      A2A_OTEL_OTLP_ENDPOINT: "http://127.0.0.1:4318/v1/traces"
+      A2A_OTEL_LOG_FORMAT: "console"
+      P1_7C_RECEIPT_PATH: "/receipts/traces.jsonl"
+    volumes:
+      - "./.demo-observability:/receipts:ro"
+
+  tempo:
+    image: "grafana/tempo:2.9.0@sha256:65a5789759435f1ef696f1953258b9bbdb18eb571d5ce711ff812d2e128288a4"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    network_mode: "service:server"
+    depends_on:
+      server:
+        condition: service_started
+    command:
+      - "-config.file=/etc/tempo.yaml"
+    volumes:
+      - "./observability/tempo.yaml:/etc/tempo.yaml:ro"
+
+  collector:
+    image: "otel/opentelemetry-collector-contrib:0.153.0@sha256:93aad750175cbf1a973ae1c5886c3371f4d800f61be25cdd26870b8441ffe9fa"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    network_mode: "service:server"
+    depends_on:
+      server:
+        condition: service_started
+      tempo:
+        condition: service_started
+    user: "${MCP_DEMO_UID:-1000}:${MCP_DEMO_GID:-1000}"
+    command:
+      - "--config=/etc/otelcol-contrib/config.yaml"
+    volumes:
+      - "./observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro"
+      - "./.demo-observability:/receipts"
+
+  grafana:
+    image: "grafana/grafana:12.2.0@sha256:74144189b38447facf737dfd0f3906e42e0776212bf575dc3334c3609183adf7"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    network_mode: "service:server"
+    depends_on:
+      server:
+        condition: service_started
+      tempo:
+        condition: service_started
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_PATHS_DATA: "/tmp/grafana-data"
+      GF_PATHS_LOGS: "/tmp/grafana-logs"
+      GF_PATHS_PLUGINS: "/tmp/grafana-plugins"
+    volumes:
+      - "./observability/grafana/provisioning:/etc/grafana/provisioning:ro"
+
+  verifier:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp-client-auth-template:p1.7c-local
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    network_mode: "service:server"
+    depends_on:
+      server:
+        condition: service_started
+      collector:
+        condition: service_started
+      tempo:
+        condition: service_started
+      grafana:
+        condition: service_started
+    volumes:
+      - "./.demo-observability:/receipts:ro"

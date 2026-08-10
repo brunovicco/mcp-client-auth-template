@@ -112,6 +112,17 @@ Execute o mesmo cenário validado em containers usando o Server `v0.5.0` publica
 
 Veja [Demo de referência com Docker Compose](docs/COMPOSE_DEMO.pt-BR.md).
 
+### Demo de referência observável
+
+Adicione Collector + Tempo + Grafana e valide traces MCP distribuídos:
+
+```bash
+./scripts/run_observability_demo.sh
+```
+
+Use `--keep` para manter o Grafana em `http://127.0.0.1:3000`. Veja
+[Demo de referência observável](docs/OBSERVABILITY_DEMO.pt-BR.md).
+
 ## Modos de autenticação
 
 | Modo | Providers | Ciclo de vida da credencial | Uso indicado |

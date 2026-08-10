@@ -9,6 +9,10 @@ pre-1.0 and remains a reference template under active development.
 
 ### Added
 
+- Added P1.7c, an optional local observability overlay with `a2a-otel-kit`,
+  OpenTelemetry Collector, Tempo, Grafana, positive Collector receipt verification,
+  MCP client/server trace continuity, Tempo retrieval, Grafana datasource validation,
+  and metadata-only privacy assertions.
 - Added P1.7b, a hardened Docker Compose reference demo that consumes the published Server
   `v0.5.0` by immutable digest and preserves the loopback-only development boundary.
 - Added P1.7a, a one-command headless reference demo that starts the deterministic local OIDC

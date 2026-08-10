@@ -111,6 +111,17 @@ Run the same validated scenario in containers with the published Server `v0.5.0`
 
 See [Docker Compose reference demo](docs/COMPOSE_DEMO.md).
 
+### Observable reference demo
+
+Add Collector + Tempo + Grafana and positively verify distributed MCP traces:
+
+```bash
+./scripts/run_observability_demo.sh
+```
+
+Use `--keep` to leave Grafana on `http://127.0.0.1:3000`. See
+[Observable reference demo](docs/OBSERVABILITY_DEMO.md).
+
 ## Authentication modes
 
 | Mode | Providers | Credential lifecycle | Good fit |
