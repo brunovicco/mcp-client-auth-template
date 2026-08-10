@@ -170,7 +170,9 @@ def test_unexpected_evidence_file_is_rejected(tmp_path: Path) -> None:
 def test_package_checksum_mismatch_is_rejected(tmp_path: Path) -> None:
     packages, evidence, output = _inputs(tmp_path)
     manifest = packages / "SHA256SUMS"
-    manifest.write_text(manifest.read_text().replace("a", "0", 1), encoding="ascii")
+    contents = manifest.read_text(encoding="ascii")
+    replacement = "0" if contents[0] != "0" else "1"
+    manifest.write_text(f"{replacement}{contents[1:]}", encoding="ascii")
 
     with pytest.raises(ReleasePublicationError, match="checksum mismatch"):
         prepare_release_publication(
