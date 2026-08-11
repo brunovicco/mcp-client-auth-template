@@ -170,6 +170,12 @@ Os templates de client/server exercitam o perfil moderno stateless como comporta
 
 Veja [Compatibilidade](docs/COMPATIBILITY.md) e [E2E entre repositórios](docs/E2E.md).
 
+Para um mapeamento baseado em evidências da implementação combinada cliente/servidor em
+relação ao perfil de autorização MCP `2026-07-28`, consulte o
+[Authorization Implementer Report](https://github.com/brunovicco/mcp-server-auth-template/blob/main/docs/AUTHORIZATION_IMPLEMENTER_REPORT.md) no repositório companion.
+O relatório diferencia evidências E2E do par, comportamento implementado pelos projetos,
+comportamento delegado ao SDK e requisitos que não foram exercitados de forma independente.
+
 ## Início rápido
 
 Pré-requisitos: Python 3.13 ou 3.14 e

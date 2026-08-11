@@ -100,6 +100,12 @@ the self-describing request envelope and sessionless Streamable HTTP behavior. I
 fail-closed issuer/audience/expiry/scope, routing-header/envelope mismatch, unsupported protocol
 version, and RFC 9207 mismatch cases.
 
+The canonical evidence-first authorization assessment for this paired implementation is
+maintained in the companion server's
+[Authorization Implementer Report](https://github.com/brunovicco/mcp-server-auth-template/blob/main/docs/AUTHORIZATION_IMPLEMENTER_REPORT.md).
+It references this client repository as the owner of the live cross-repository OAuth/MCP E2E
+suite; the report is intentionally not duplicated here to avoid evidence drift.
+
 The CIMD profile proves that an advertised `client_id_metadata_document_supported=true` causes the
 configured HTTPS metadata URL to become the public client's `client_id`, with no client secret and
 no DCR request. The fake authorization server treats the document as pre-validated fixture data;
