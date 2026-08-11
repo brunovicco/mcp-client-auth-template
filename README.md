@@ -169,6 +169,12 @@ The paired client/server templates exercise the modern stateless profile as exec
 
 See [Compatibility](docs/COMPATIBILITY.md) and [Cross-repository E2E](docs/E2E.md).
 
+For an evidence-first mapping of the paired client/server implementation against the MCP
+`2026-07-28` authorization profile, see the companion
+[Authorization Implementer Report](https://github.com/brunovicco/mcp-server-auth-template/blob/main/docs/AUTHORIZATION_IMPLEMENTER_REPORT.md).
+The report distinguishes pair E2E evidence, project-owned behavior, SDK-delegated behavior,
+and requirements that are not independently exercised.
+
 ## Quick start
 
 Prerequisites: Python 3.13 or 3.14 and
