@@ -510,6 +510,7 @@ async def run_reference_scenario(
         "authorization_scopes": [_REQUIRED_SCOPE, expected_scope_union],
         "client_credentials_exchanges": 0,
         "client_credentials_scopes": [],
+        "accepted_client_assertions": [],
     }
     if state != expected_state:
         raise DemoError(f"authorization-server evidence drifted: {state}")
