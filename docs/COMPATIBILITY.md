@@ -150,6 +150,18 @@ step-up, `list_tools(cache_mode="refresh")` and the following cached call both r
 These assertions need the companion server's v0.7.0 `tools/list` wire-result fix. Until the pair
 release, run them against the server's v0.7.0 branch, and merge the server first.
 
+v0.7.0 pair evidence and the tests that prove each entry:
+
+| Contract entry | Kind | Evidence |
+| --- | --- | --- |
+| `mcp-sdk-2.2` | positive | `scripts/compatibility_contract.py` minimum profile `2.2.0`; `tests/unit/test_mcp_deprecation_gate.py` |
+| `oauth-private-key-jwt` | positive | E2E `test_private_key_jwt_flow_is_non_interactive_and_steps_up_scopes`; `tests/integration/test_private_key_jwt.py` |
+| `tools/list:authorization-filtered` | positive | E2E `test_tools_list_interoperates_over_the_sdk_and_the_wire` (four profiles) |
+| `authorization-server-issuer-binding` | negative | E2E `test_machine_credential_never_reaches_an_authorization_server_the_prm_substitutes`; `tests/integration/test_issuer_binding.py` |
+| `oauth-cross-origin-redirect-rejection` | negative | `tests/integration/test_oauth_fail_closed.py::test_cross_origin_*`, `test_token_endpoint_redirect_*`, `test_mcp_endpoint_redirect_*` |
+| `oauth-prm-fail-closed` | negative | `tests/integration/test_oauth_fail_closed.py::test_prm_*` |
+| `token-audience-validation` | negative | E2E `test_invalid_tokens_fail_closed` (wrong audience, `401`) against the server's explicit audience policy |
+
 Local pair verification:
 
 ```bash
