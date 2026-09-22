@@ -23,12 +23,18 @@ from a2a_otel_kit.entrypoints.observability import Observability
 from mcp.shared.auth import AuthorizationCodeResult
 
 from mcp_client_auth_template.adapters.token_storage import InMemoryTokenStorage
-from mcp_client_auth_template.entrypoints.demo_client import build_mcp_client, build_oauth_provider
+from mcp_client_auth_template.entrypoints.demo_client import (
+    build_mcp_client,
+    build_oauth_provider,
+    discover_visible_tools,
+)
 from mcp_client_auth_template.entrypoints.settings import Settings
 
 _CLIENT_ROOT = Path(__file__).resolve().parents[1]
 _REQUIRED_SCOPE = "mcp:tools:call"
 _HEALTH_SCOPE = "mcp:tools:health"
+_INITIAL_CATALOG = frozenset({"whoami"})
+_ELEVATED_CATALOG = frozenset({"whoami", "health"})
 _PROTOCOL_VERSION = "2026-07-28"
 _CIMD_CLIENT_ID = "https://client.example.invalid/oauth/client-metadata.json"
 _WRONG_AUDIENCE = "https://wrong-resource.example.invalid/"
@@ -320,6 +326,26 @@ async def _protected_request_status(topology: ReferenceTopology, token: str) -> 
     return response.status_code
 
 
+async def _unauthenticated_catalog_challenge(topology: ReferenceTopology) -> int:
+    """Send ``tools/list`` with no bearer token; return the status of a proper OAuth challenge."""
+    async with httpx2.AsyncClient(follow_redirects=False, timeout=5.0) as client:
+        response = await client.request(
+            "POST",
+            f"{topology.server_url}/mcp",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "MCP-Protocol-Version": _PROTOCOL_VERSION,
+                "Mcp-Method": "tools/list",
+            },
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+        await response.aread()
+    if "resource_metadata=" not in response.headers.get("WWW-Authenticate", ""):
+        raise DemoError("unauthenticated tools/list was not answered with an OAuth challenge")
+    return response.status_code
+
+
 def _modern_tool_request() -> dict[str, object]:
     """Build one MCP 2026-07-28 self-describing tool call."""
     return {
@@ -452,11 +478,17 @@ async def run_reference_scenario(
                 f"negotiated protocol {client.protocol_version!r}, expected {_PROTOCOL_VERSION!r}"
             )
 
-        _step("proving protected tools are hidden from anonymous catalog discovery", quiet=quiet)
-        anonymous_listing = await client.list_tools(cache_mode="bypass")
-        if anonymous_listing.tools:
-            names = ", ".join(sorted(tool.name for tool in anonymous_listing.tools))
-            raise DemoError(f"anonymous tools/list unexpectedly exposed protected tools: {names}")
+        _step("proving unauthenticated catalog discovery gets an OAuth challenge", quiet=quiet)
+        unauthenticated_status = await _unauthenticated_catalog_challenge(topology)
+        if unauthenticated_status != 401:
+            raise DemoError(
+                f"unauthenticated tools/list returned HTTP {unauthenticated_status}, expected 401"
+            )
+
+        _step("proving the authenticated catalog is filtered to the granted scope", quiet=quiet)
+        initial_catalog = await discover_visible_tools(client, required=frozenset({"whoami"}))
+        if initial_catalog != _INITIAL_CATALOG:
+            raise DemoError(f"initial tools/list view was {sorted(initial_catalog)}")
 
         # This server intentionally returns an authorization-filtered catalog. The SDK v2
         # re-runs tools/list after successful calls to discover output schemas and emits a
@@ -492,6 +524,14 @@ async def run_reference_scenario(
                 raise DemoError(
                     "step-up did not preserve the original scope and add the health scope"
                 )
+
+            # The catalog is cacheScope=private and the SDK keeps it for the Client's lifetime;
+            # a step-up changes the authorization context, so refresh rather than reuse it.
+            _step("refreshing the private tools/list view after step-up", quiet=quiet)
+            await client.list_tools(cache_mode="refresh")
+            elevated_catalog = await discover_visible_tools(client, required=_ELEVATED_CATALOG)
+            if elevated_catalog != _ELEVATED_CATALOG:
+                raise DemoError(f"elevated tools/list view was {sorted(elevated_catalog)}")
 
     tokens = await storage.get_tokens()
     if tokens is None or not tokens.access_token:
@@ -547,8 +587,9 @@ async def run_reference_scenario(
             "elevated_scopes": [_REQUIRED_SCOPE, _HEALTH_SCOPE],
         },
         "mcp_calls": {
-            "anonymous_catalog_tools": [],
-            "protected_catalog_hidden": True,
+            "unauthenticated_catalog_status": unauthenticated_status,
+            "initial_catalog_tools": sorted(initial_catalog),
+            "elevated_catalog_tools": sorted(elevated_catalog),
             "whoami_authenticated": True,
             "health": "ok",
             "step_up_completed": True,
@@ -620,7 +661,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("P1.7a REFERENCE DEMO PASSED")
         print("OAuth:    CIMD-first Authorization Code + PKCE")
         print("MCP:      2026-07-28, authenticated whoami + health")
-        print("Catalog:  protected tools hidden from anonymous tools/list")
+        print("Catalog:  401 without a token; tools/list filtered per scope, refreshed on step-up")
         print("Step-up:  mcp:tools:call -> + mcp:tools:health")
         print("Audience: wrong-resource JWT rejected with HTTP 401")
         print("State:    no protocol-level session minted")

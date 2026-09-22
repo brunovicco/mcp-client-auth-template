@@ -58,6 +58,15 @@ class ClientFailure:
     exception_type: str
 
 
+class RequiredToolUnavailableError(RuntimeError):
+    """Raised when the authorized ``tools/list`` view lacks a tool the client needs."""
+
+    def __init__(self, tool_name: str) -> None:
+        """Remember only the safe tool name."""
+        self.tool_name = tool_name
+        super().__init__("required MCP tool is not visible to this principal")
+
+
 class ToolCallFailedError(RuntimeError):
     """Raised when an MCP tool returns ``is_error=True``."""
 
@@ -129,7 +138,7 @@ def classify_failure(error: Exception) -> ClientFailure:
     if matched is not None:
         return _failure(matched, ClientFailureCategory.NETWORK, ClientExitCode.NETWORK)
 
-    matched = _first_matching(errors, (ToolCallFailedError,))
+    matched = _first_matching(errors, (ToolCallFailedError, RequiredToolUnavailableError))
     if matched is not None:
         return _failure(matched, ClientFailureCategory.TOOL, ClientExitCode.TOOL)
 

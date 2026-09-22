@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx2
 import pytest
 from cryptography.hazmat.primitives import serialization
-from mcp.client.auth import OAuthFlowError
+from mcp.client.auth import OAuthClientProvider, OAuthFlowError
 from mcp.shared.auth import AuthorizationCodeResult, OAuthClientInformationFull
 from pydantic import AnyUrl
 
@@ -23,8 +23,13 @@ from mcp_client_auth_template.adapters.client_credentials_auth import (
     OAUTH_CLIENT_CREDENTIALS_EXTENSION_ID,
 )
 from mcp_client_auth_template.adapters.token_storage import InMemoryTokenStorage
-from mcp_client_auth_template.entrypoints.demo_client import build_mcp_client, build_oauth_provider
+from mcp_client_auth_template.entrypoints.demo_client import (
+    build_mcp_client,
+    build_oauth_provider,
+    discover_visible_tools,
+)
 from mcp_client_auth_template.entrypoints.settings import Settings
+from tests.integration.client_stack import production_client
 from tests.key_material import pem, rsa_key, secure_key_dir, write_key
 
 pytestmark = pytest.mark.e2e
@@ -983,3 +988,168 @@ async def test_rfc9207_authorization_response_issuer_mismatch_is_rejected(
     state = await _json_request("GET", f"{topology.issuer}/__test__/state")
     assert state["authorizations"] == 1
     assert state["token_exchanges"] == 0
+
+
+# --- Real tools/list interoperability (SDK client + wire, no hand-built results) -------------
+
+_BASIC_VIEW = frozenset({"whoami"})
+_ELEVATED_VIEW = frozenset({"whoami", "health"})
+
+
+def _tools_list_request() -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/list",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": _PROTOCOL_VERSION,
+                "io.modelcontextprotocol/clientInfo": {"name": "wire-e2e", "version": "1.0.0"},
+                "io.modelcontextprotocol/clientCapabilities": {},
+            }
+        },
+    }
+
+
+async def _wire_tool_names(topology: _Topology, token: str) -> frozenset[str]:
+    """``tools/list`` as raw JSON-RPC over HTTP with the client's own access token."""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "MCP-Protocol-Version": _PROTOCOL_VERSION,
+        "Mcp-Method": "tools/list",
+    }
+    async with httpx2.AsyncClient(follow_redirects=False, timeout=5.0) as client:
+        response = await client.post(
+            f"{topology.server_url}/mcp", headers=headers, json=_tools_list_request()
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "result" in body, body
+    return frozenset(tool["name"] for tool in body["result"]["tools"])
+
+
+async def _current_token(storage: InMemoryTokenStorage) -> str:
+    tokens = await storage.get_tokens()
+    assert tokens is not None
+    return tokens.access_token
+
+
+async def _machine_settings(topology: _Topology, machine_key: _MachineKey, method: str) -> Settings:
+    if method == "private_key_jwt":
+        return _private_key_jwt_settings(
+            topology.server_url, topology.issuer, machine_key.private_key_path
+        )
+    return Settings(
+        auth_provider="generic",
+        auth_mode="client_credentials",
+        server_url=topology.server_url,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+        client_credentials_client_id=_MACHINE_CLIENT_ID,
+        client_credentials_secret=_MACHINE_CLIENT_CREDENTIAL,
+        client_credentials_issuer=topology.issuer,
+    )
+
+
+async def _profile(
+    profile: str, topology: _Topology, machine_key: _MachineKey
+) -> tuple[Settings, InMemoryTokenStorage, OAuthClientProvider]:
+    storage = InMemoryTokenStorage()
+    if profile in {"client_secret_basic", "private_key_jwt"}:
+        settings = await _machine_settings(topology, machine_key, profile)
+        return settings, storage, await build_oauth_provider(settings, storage=storage)
+    if profile == "cimd":
+        await _json_request(
+            "POST",
+            f"{topology.issuer}/__test__/configure",
+            {"client_id_metadata_document_supported": True},
+        )
+    settings = Settings(
+        auth_provider="generic",
+        server_url=topology.server_url,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+        generic_client_metadata_url=_CIMD_CLIENT_ID if profile == "cimd" else None,
+    )
+    browser = _AuthorizationRedirectHarness()
+    provider = await build_oauth_provider(
+        settings,
+        storage=storage,
+        redirect_handler=browser.redirect,
+        callback_handler=browser.callback,
+    )
+    return settings, storage, provider
+
+
+@pytest.mark.parametrize("profile", ["dcr", "cimd", "client_secret_basic", "private_key_jwt"])
+async def test_tools_list_interoperates_over_the_sdk_and_the_wire(
+    topology: _Topology, machine_key: _MachineKey, profile: str
+) -> None:
+    """OAuth, modern protocol, and an authorization-filtered catalog that follows step-up."""
+    settings, storage, provider = await _profile(profile, topology, machine_key)
+
+    async with production_client(settings, oauth_provider=provider) as client:
+        assert client.protocol_version == _PROTOCOL_VERSION
+
+        initial_view = await discover_visible_tools(client, required=frozenset({"whoami"}))
+        assert initial_view == _BASIC_VIEW
+        assert await _wire_tool_names(topology, await _current_token(storage)) == initial_view
+
+        whoami = await client.call_tool("whoami")
+        assert whoami.structured_content is not None
+        assert whoami.structured_content["authenticated"] is True
+
+        health = await client.call_tool("health")
+        assert health.structured_content == {"status": "ok"}
+
+        refreshed = await client.list_tools(cache_mode="refresh")
+        refreshed_view = frozenset(tool.name for tool in refreshed.tools)
+        assert refreshed_view == _ELEVATED_VIEW
+        assert await _wire_tool_names(topology, await _current_token(storage)) == refreshed_view
+
+        cached_view = await discover_visible_tools(client)
+        assert cached_view == _ELEVATED_VIEW
+
+
+async def test_sdk_private_cache_is_not_evicted_by_an_in_client_scope_step_up(
+    topology: _Topology, machine_key: _MachineKey
+) -> None:
+    """Characterize MCP SDK 2.2: a step-up inside one Client keeps the old private catalog.
+
+    The SDK partitions its response cache per ``Client`` ("construct a new Client when the
+    principal changes") and does not evict when the OAuth provider swaps tokens. Within the
+    30-second ``ttlMs`` a plain ``list_tools()`` right after a step-up therefore serves the
+    pre-step-up view. The server keeps authorizing on the wire, so the stale view can hide a
+    newly granted tool but never grants one. The client refreshes explicitly after an
+    authorization-context change (see the interoperability test above).
+    """
+    settings, storage, provider = await _profile("client_secret_basic", topology, machine_key)
+
+    async with production_client(settings, oauth_provider=provider) as client:
+        assert await discover_visible_tools(client) == _BASIC_VIEW
+        await client.call_tool("health")
+
+        assert await _wire_tool_names(topology, await _current_token(storage)) == _ELEVATED_VIEW
+        assert await discover_visible_tools(client) == _BASIC_VIEW
+
+
+async def test_anonymous_tools_list_is_refused_by_the_companion_server(
+    topology: _Topology,
+) -> None:
+    """Discovery without a bearer token gets the server's real contract: an OAuth challenge."""
+    async with httpx2.AsyncClient(follow_redirects=False, timeout=5.0) as client:
+        response = await client.post(
+            f"{topology.server_url}/mcp",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "MCP-Protocol-Version": _PROTOCOL_VERSION,
+                "Mcp-Method": "tools/list",
+            },
+            json=_tools_list_request(),
+        )
+
+    assert response.status_code == 401
+    assert "resource_metadata=" in response.headers["WWW-Authenticate"]

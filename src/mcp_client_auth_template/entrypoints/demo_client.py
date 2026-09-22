@@ -46,6 +46,7 @@ from mcp_client_auth_template.adapters.private_key_source import load_signing_ke
 from mcp_client_auth_template.adapters.token_storage import FileTokenStorage, InMemoryTokenStorage
 from mcp_client_auth_template.entrypoints.cli_failures import (
     ClientExitCode,
+    RequiredToolUnavailableError,
     ToolCallFailedError,
     classify_failure,
     emit_failure,
@@ -202,6 +203,22 @@ def build_http_timeout(settings: Settings) -> httpx2.Timeout:
     )
 
 
+async def discover_visible_tools(
+    client: Client, *, required: frozenset[str] = frozenset()
+) -> frozenset[str]:
+    """Return the tool names this principal may see, from the SDK's real ``tools/list``.
+
+    The server filters the catalog per principal (and marks it ``cacheScope=private``), so the
+    set reflects the current authorization context. Fails closed when a required tool is absent.
+    """
+    listing = await client.list_tools()
+    visible = frozenset(tool.name for tool in listing.tools)
+    missing = sorted(required - visible)
+    if missing:
+        raise RequiredToolUnavailableError(missing[0])
+    return visible
+
+
 async def call_tool_with_budget(
     client: Client,
     tool_name: str,
@@ -290,6 +307,9 @@ async def run_demo() -> None:
             build_mcp_client(settings, http_client=http_client)
         )
         logger.info("mcp_connected", protocol_version=client.protocol_version)
+
+        visible_tools = await discover_visible_tools(client, required=frozenset({"whoami"}))
+        logger.info("mcp_tools_discovered", tool_names=sorted(visible_tools))
 
         await call_tool_with_budget(
             client, "whoami", timeout_seconds=settings.tool_call_timeout_seconds
