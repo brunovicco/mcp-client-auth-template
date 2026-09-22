@@ -6,6 +6,7 @@ from mcp.client.auth.exceptions import OAuthFlowError
 from mcp.shared.exceptions import MCPError
 
 from mcp_client_auth_template.adapters.oauth_discovery_security import OAuthNetworkSecurityError
+from mcp_client_auth_template.adapters.private_key_source import PrivateKeySourceError
 from mcp_client_auth_template.adapters.token_storage import (
     TokenStorageCorruptionError,
     TokenStorageSecurityError,
@@ -26,6 +27,11 @@ from mcp_client_auth_template.entrypoints.preflight import ConfigurationPrefligh
     [
         (
             ConfigurationPreflightError("sensitive-config-value"),
+            ClientFailureCategory.CONFIGURATION,
+            ClientExitCode.CONFIGURATION,
+        ),
+        (
+            PrivateKeySourceError("sensitive-key-policy-value"),
             ClientFailureCategory.CONFIGURATION,
             ClientExitCode.CONFIGURATION,
         ),

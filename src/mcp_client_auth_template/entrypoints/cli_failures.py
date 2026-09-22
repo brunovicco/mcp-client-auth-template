@@ -11,6 +11,7 @@ from mcp.client.auth.exceptions import OAuthFlowError
 from mcp.shared.exceptions import MCPError
 
 from mcp_client_auth_template.adapters.oauth_discovery_security import OAuthNetworkSecurityError
+from mcp_client_auth_template.adapters.private_key_source import PrivateKeySourceError
 from mcp_client_auth_template.adapters.token_storage import (
     TokenStorageCorruptionError,
     TokenStorageSecurityError,
@@ -97,7 +98,7 @@ def classify_failure(error: Exception) -> ClientFailure:
     """Map expected operational exceptions to a stable, secret-free process contract."""
     errors = tuple(_exception_tree(error))
 
-    matched = _first_matching(errors, (ConfigurationPreflightError,))
+    matched = _first_matching(errors, (ConfigurationPreflightError, PrivateKeySourceError))
     if matched is not None:
         return _failure(matched, ClientFailureCategory.CONFIGURATION, ClientExitCode.CONFIGURATION)
 

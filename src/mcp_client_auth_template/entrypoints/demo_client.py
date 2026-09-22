@@ -33,6 +33,7 @@ from mcp_client_auth_template.adapters.browser_redirect import open_system_brows
 from mcp_client_auth_template.adapters.client_credentials_auth import (
     OAUTH_CLIENT_CREDENTIALS_EXTENSION_ID,
     build_client_credentials_oauth_provider,
+    build_private_key_jwt_oauth_provider,
 )
 from mcp_client_auth_template.adapters.entra_client_auth import build_entra_oauth_provider
 from mcp_client_auth_template.adapters.generic_oidc_client_auth import build_generic_oauth_provider
@@ -41,6 +42,7 @@ from mcp_client_auth_template.adapters.oauth_discovery_security import (
     OAuthDiscoverySecurityPolicy,
     PinnedDnsAsyncTransport,
 )
+from mcp_client_auth_template.adapters.private_key_source import load_signing_key
 from mcp_client_auth_template.adapters.token_storage import FileTokenStorage, InMemoryTokenStorage
 from mcp_client_auth_template.entrypoints.cli_failures import (
     ClientExitCode,
@@ -140,6 +142,18 @@ async def build_oauth_provider(
     if settings.auth_mode == "client_credentials":
         client_id = cast(str, settings.client_credentials_client_id)
         issuer = cast(str, settings.client_credentials_issuer)
+        if settings.client_auth_method == "private_key_jwt":
+            key_path = settings.client_credentials_private_key_path
+            if key_path is None:  # pragma: no cover - Settings validates this invariant
+                raise RuntimeError("private_key_jwt settings were not validated")
+            return build_private_key_jwt_oauth_provider(
+                server_url=settings.server_url,
+                storage=storage,
+                client_id=client_id,
+                signing_key=load_signing_key(key_path),
+                issuer=issuer,
+                scope=settings.scope,
+            )
         secret = settings.client_credentials_secret
         if secret is None:  # pragma: no cover - Settings validates this invariant
             raise RuntimeError("client credentials settings were not validated")

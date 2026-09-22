@@ -9,8 +9,10 @@ from mcp_client_auth_template.entrypoints.preflight import (
     ConfigurationPreflightError,
     load_validated_settings,
     validate_production_settings,
+    validate_signing_key,
 )
 from mcp_client_auth_template.entrypoints.settings import Settings
+from tests.key_material import pem, rsa_key, secure_key_dir, write_key
 
 _ENTRA_TENANT_ID = "11111111-1111-1111-1111-111111111111"
 _ENTRA_CLIENT_ID = "22222222-2222-2222-2222-222222222222"
@@ -88,6 +90,29 @@ def test_production_preflight_rejects_loopback_or_placeholder_machine_issuer() -
     assert ("client_credentials_issuer", "https_required_in_production") in loopback_issues
     assert [(issue.location, issue.type) for issue in placeholder_issues] == [
         ("client_credentials_issuer", "placeholder_host_not_allowed")
+    ]
+
+
+def test_preflight_rejects_a_private_key_file_that_violates_the_policy() -> None:
+    with secure_key_dir() as key_dir:
+        good = write_key(key_dir / "good.pem", pem(rsa_key()))
+        exposed = write_key(key_dir / "exposed.pem", good.read_bytes(), mode=0o644)
+
+        def machine(key_path: object) -> Settings:
+            return _production_settings(
+                auth_provider="generic",
+                auth_mode="client_credentials",
+                client_auth_method="private_key_jwt",
+                client_credentials_client_id="machine-client",
+                client_credentials_private_key_path=key_path,
+                client_credentials_issuer="https://login.acme.com",
+            )
+
+        assert validate_signing_key(machine(good)) == []
+        issues = validate_signing_key(machine(exposed))
+
+    assert [(issue.location, issue.type) for issue in issues] == [
+        ("client_credentials_private_key_path", "private_key_rejected")
     ]
 
 

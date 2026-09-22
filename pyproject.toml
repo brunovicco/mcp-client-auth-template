@@ -9,6 +9,9 @@ dependencies = [
     "pydantic-settings>=2.8",
     "structlog>=25.1",
     "mcp>=2.2,<3",
+    # Parses and type-checks the private_key_jwt signing key (ADR-0025); already required
+    # transitively through the SDK's pyjwt[crypto], declared because the client imports it.
+    "cryptography>=45",
     "anyio>=4.8",
     # Observability: see docs/OBSERVABILITY.md and docs/adr/0019-native-mcp-v2-observability.md.
     # Network-silent by default (ObservabilitySettings.enabled=False); a core dependency because

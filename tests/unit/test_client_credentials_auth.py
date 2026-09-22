@@ -4,7 +4,10 @@ from pathlib import Path
 
 import httpx2
 import pytest
-from mcp.client.auth.extensions.client_credentials import ClientCredentialsOAuthProvider
+from mcp.client.auth.extensions.client_credentials import (
+    ClientCredentialsOAuthProvider,
+    PrivateKeyJWTOAuthProvider,
+)
 from pydantic import ValidationError
 
 from mcp_client_auth_template.adapters.client_credentials_auth import (
@@ -17,6 +20,7 @@ from mcp_client_auth_template.entrypoints.demo_client import (
     build_token_storage,
 )
 from mcp_client_auth_template.entrypoints.settings import Settings
+from tests.key_material import pem, rsa_key, secure_key_dir, write_key
 
 _TEST_CLIENT_ID = "e2e-machine-client"
 _TEST_CREDENTIAL = "unit-test-credential"
@@ -180,3 +184,57 @@ async def test_configured_issuer_reaches_the_sdk_provider_unchanged() -> None:
 
     assert isinstance(provider, ClientCredentialsOAuthProvider)
     assert provider._issuer == "https://as.example.invalid/tenant"
+
+
+def _key_settings(key_path: Path | None, **overrides: object) -> Settings:
+    values: dict[str, object] = {
+        "client_auth_method": "private_key_jwt",
+        "client_credentials_secret": None,
+        "client_credentials_private_key_path": key_path,
+    }
+    return _settings(**{**values, **overrides})
+
+
+def test_client_secret_basic_remains_the_default_machine_method() -> None:
+    assert _settings().client_auth_method == "client_secret_basic"
+
+
+def test_private_key_jwt_requires_a_key_file_and_rejects_a_shared_secret() -> None:
+    with pytest.raises(ValidationError, match="requires: client_credentials_private_key_path"):
+        _key_settings(None)
+    with pytest.raises(ValidationError, match="client_credentials_secret is not used"):
+        _key_settings(Path("/run/secrets/client.pem"), client_credentials_secret=_TEST_CREDENTIAL)
+    with pytest.raises(ValidationError, match="absolute path"):
+        _key_settings(Path("secrets/client.pem"))
+
+
+def test_client_secret_basic_rejects_a_key_file() -> None:
+    with pytest.raises(ValidationError, match="client_credentials_private_key_path is not used"):
+        _settings(client_credentials_private_key_path=Path("/run/secrets/client.pem"))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"client_auth_method": "private_key_jwt"},
+        {"client_credentials_private_key_path": Path("/run/secrets/client.pem")},
+    ],
+)
+def test_machine_key_settings_are_rejected_in_interactive_mode(
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError, match="only with auth_mode=client_credentials"):
+        Settings.model_validate(
+            {"auth_provider": "generic", "server_url": "https://mcp.example.invalid", **overrides}
+        )
+
+
+async def test_private_key_jwt_builds_the_sdk_provider_bound_to_the_issuer() -> None:
+    with secure_key_dir() as key_dir:
+        key_path = write_key(key_dir / "client.pem", pem(rsa_key()))
+        provider = await build_oauth_provider(
+            _key_settings(key_path), storage=InMemoryTokenStorage()
+        )
+
+    assert isinstance(provider, PrivateKeyJWTOAuthProvider)
+    assert provider._issuer == _TEST_ISSUER

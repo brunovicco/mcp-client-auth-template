@@ -8,6 +8,10 @@ from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
+from mcp_client_auth_template.adapters.private_key_source import (
+    PrivateKeySourceError,
+    load_signing_key,
+)
 from mcp_client_auth_template.entrypoints.settings import Settings
 
 _ALLOWED_ENVIRONMENTS = frozenset({"development", "test", "production"})
@@ -102,7 +106,23 @@ def run_preflight() -> tuple[Settings | None, str | None, list[PreflightIssue]]:
         ]
         return None, environment, issues
 
-    return settings, environment, validate_production_settings(settings, environment)
+    return (
+        settings,
+        environment,
+        validate_production_settings(settings, environment) + validate_signing_key(settings),
+    )
+
+
+def validate_signing_key(settings: Settings) -> list[PreflightIssue]:
+    """Apply the local key-file policy now, reporting only that it failed, never why in detail."""
+    key_path = settings.client_credentials_private_key_path
+    if settings.client_auth_method != "private_key_jwt" or key_path is None:
+        return []
+    try:
+        load_signing_key(key_path)
+    except PrivateKeySourceError:
+        return [PreflightIssue("client_credentials_private_key_path", "private_key_rejected")]
+    return []
 
 
 def load_validated_settings() -> Settings:
@@ -139,6 +159,9 @@ def _result_payload(
         "auth_provider": settings.auth_provider,
         "auth_mode": settings.auth_mode,
         "token_storage": "memory" if settings.token_storage_path is None else "file",
+        "client_auth_method": (
+            settings.client_auth_method if settings.auth_mode == "client_credentials" else "none"
+        ),
     }
 
 
