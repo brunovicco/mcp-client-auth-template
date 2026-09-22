@@ -33,6 +33,13 @@ _CLIENT_ID_METADATA_DOCUMENT_SUPPORTED = False
 _CIMD_CLIENT_ID = "https://client.example.invalid/oauth/client-metadata.json"
 _MACHINE_CLIENT_ID = "mcp-e2e-machine"
 _MACHINE_CLIENT_CREDENTIAL = "e2e-test-credential"
+# private_key_jwt (RFC 7523): the registered client public key, as a PEM file path.
+_ASSERTION_CLIENT_ID = "mcp-e2e-machine-pkjwt"
+_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+_ASSERTION_MAX_LIFETIME_SECONDS = 60
+_ASSERTION_PUBLIC_KEY_PATH = os.environ.get("FAKE_OIDC_CLIENT_ASSERTION_PUBLIC_KEY")
+_SEEN_ASSERTION_IDS: set[str] = set()
+_ACCEPTED_ASSERTIONS: list[dict[str, object]] = []
 # Every non-test-control request as received. The E2E suite reads it back to prove what did,
 # and did not, cross the wire; it only ever holds throwaway local test credentials.
 _REQUEST_JOURNAL: list[dict[str, object]] = []
@@ -77,6 +84,42 @@ def _basic_credentials(request: Request) -> tuple[str, str] | None:
     if not separator:
         return None
     return client_id, client_secret
+
+
+def _assertion_client(form: dict[str, str]) -> str | None:
+    """Verify an RFC 7523 client assertion strictly; return the client ID or ``None``."""
+    assertion = form.get("client_assertion")
+    if (
+        assertion is None
+        or form.get("client_assertion_type") != _ASSERTION_TYPE
+        or _ASSERTION_PUBLIC_KEY_PATH is None
+    ):
+        return None
+    with open(_ASSERTION_PUBLIC_KEY_PATH, "rb") as handle:
+        public_key = handle.read()
+    try:
+        claims = jwt.decode(
+            assertion,
+            public_key,
+            algorithms=["RS256", "ES256"],
+            audience=_ISSUER,
+            issuer=_ASSERTION_CLIENT_ID,
+            options={"require": ["exp", "iat", "jti", "sub", "aud", "iss"]},
+        )
+    except jwt.PyJWTError:
+        return None
+    if (
+        claims["sub"] != _ASSERTION_CLIENT_ID
+        or claims["jti"] in _SEEN_ASSERTION_IDS
+        or claims["exp"] - claims["iat"] > _ASSERTION_MAX_LIFETIME_SECONDS
+    ):
+        return None
+    _SEEN_ASSERTION_IDS.add(claims["jti"])
+    _ACCEPTED_ASSERTIONS.append(
+        {key: claims[key] for key in ("iss", "sub", "aud")}
+        | {"lifetime": claims["exp"] - claims["iat"]}
+    )
+    return _ASSERTION_CLIENT_ID
 
 
 def _pkce_challenge(verifier: str) -> str:
@@ -125,7 +168,12 @@ async def metadata(_: Request) -> Response:
             ],
             "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code", "client_credentials"],
-            "token_endpoint_auth_methods_supported": ["none", "client_secret_basic"],
+            "token_endpoint_auth_methods_supported": [
+                "none",
+                "client_secret_basic",
+                "private_key_jwt",
+            ],
+            "token_endpoint_auth_signing_alg_values_supported": ["RS256", "ES256"],
             "code_challenge_methods_supported": ["S256"],
             "authorization_response_iss_parameter_supported": True,
             "client_id_metadata_document_supported": _CLIENT_ID_METADATA_DOCUMENT_SUPPORTED,
@@ -205,15 +253,21 @@ async def token(request: Request) -> Response:
     form = _form_values(await request.body())
     grant_type = form.get("grant_type")
     if grant_type == "client_credentials":
-        credentials = _basic_credentials(request)
-        if credentials is None:
-            return JSONResponse({"error": "invalid_client"}, status_code=401)
-        client_id, client_secret = credentials
-        if not (
-            secrets.compare_digest(client_id, _MACHINE_CLIENT_ID)
-            and secrets.compare_digest(client_secret, _MACHINE_CLIENT_CREDENTIAL)
-        ):
-            return JSONResponse({"error": "invalid_client"}, status_code=401)
+        if "client_assertion" in form:
+            assertion_client = _assertion_client(form)
+            if assertion_client is None:
+                return JSONResponse({"error": "invalid_client"}, status_code=401)
+            client_id = assertion_client
+        else:
+            credentials = _basic_credentials(request)
+            if credentials is None:
+                return JSONResponse({"error": "invalid_client"}, status_code=401)
+            client_id, client_secret = credentials
+            if not (
+                secrets.compare_digest(client_id, _MACHINE_CLIENT_ID)
+                and secrets.compare_digest(client_secret, _MACHINE_CLIENT_CREDENTIAL)
+            ):
+                return JSONResponse({"error": "invalid_client"}, status_code=401)
 
         resource = form.get("resource", "")
         if not resource:
@@ -384,6 +438,7 @@ async def state(_: Request) -> Response:
             "authorization_scopes": list(_AUTHORIZATION_SCOPES),
             "client_credentials_exchanges": _CLIENT_CREDENTIALS_EXCHANGE_COUNT,
             "client_credentials_scopes": list(_CLIENT_CREDENTIALS_SCOPES),
+            "accepted_client_assertions": list(_ACCEPTED_ASSERTIONS),
         }
     )
 

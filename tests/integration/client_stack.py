@@ -19,10 +19,13 @@ from mcp_client_auth_template.entrypoints.settings import Settings
 
 @asynccontextmanager
 async def production_client(
-    settings: Settings, *, oauth_provider: OAuthClientProvider
+    settings: Settings,
+    *,
+    oauth_provider: OAuthClientProvider,
+    observability: Observability | None = None,
 ) -> AsyncIterator[Client]:
     """Connect through the DNS-pinned, redirect-bounded production HTTP stack."""
-    observability = Observability.configure(build_observability_settings())
+    observability = observability or Observability.configure(build_observability_settings())
     transport = build_secure_http_transport(
         settings, policy=build_oauth_network_policy(settings), observability=observability
     )

@@ -6,7 +6,7 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx2
 import pytest
+from cryptography.hazmat.primitives import serialization
 from mcp.client.auth import OAuthFlowError
 from mcp.shared.auth import AuthorizationCodeResult, OAuthClientInformationFull
 from pydantic import AnyUrl
@@ -24,6 +25,7 @@ from mcp_client_auth_template.adapters.client_credentials_auth import (
 from mcp_client_auth_template.adapters.token_storage import InMemoryTokenStorage
 from mcp_client_auth_template.entrypoints.demo_client import build_mcp_client, build_oauth_provider
 from mcp_client_auth_template.entrypoints.settings import Settings
+from tests.key_material import pem, rsa_key, secure_key_dir, write_key
 
 pytestmark = pytest.mark.e2e
 
@@ -45,6 +47,7 @@ _PROTOCOL_VERSION = "2026-07-28"
 _CIMD_CLIENT_ID = "https://client.example.invalid/oauth/client-metadata.json"
 _MACHINE_CLIENT_ID = "mcp-e2e-machine"
 _MACHINE_CLIENT_CREDENTIAL = "e2e-test-credential"
+_ASSERTION_CLIENT_ID = "mcp-e2e-machine-pkjwt"
 _HEADER_MISMATCH = -32020
 _UNSUPPORTED_PROTOCOL_VERSION = -32022
 
@@ -139,10 +142,34 @@ def _wait_for_port(port: int, process: _RunningProcess, *, timeout_seconds: floa
     pytest.fail(f"timed out waiting for localhost:{port}")
 
 
-def _start_fake_as(as_port: int) -> _RunningProcess:
+@dataclass(frozen=True)
+class _MachineKey:
+    private_key_path: Path
+    public_key_path: Path
+
+
+@pytest.fixture(scope="module")
+def machine_key() -> Iterator[_MachineKey]:
+    """One RSA client key pair registered at every fake AS for ``private_key_jwt``."""
+    key = rsa_key()
+    with secure_key_dir() as key_dir:
+        public_key_path = key_dir / "client-public.pem"
+        public_key_path.write_bytes(
+            key.public_key().public_bytes(
+                serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+        )
+        yield _MachineKey(
+            private_key_path=write_key(key_dir / "client.pem", pem(key)),
+            public_key_path=public_key_path,
+        )
+
+
+def _start_fake_as(as_port: int, public_key_path: Path) -> _RunningProcess:
     """Start one fake OIDC AS process whose issuer is its own localhost URL."""
     fake_env = os.environ.copy()
     fake_env["FAKE_OIDC_ISSUER"] = f"http://127.0.0.1:{as_port}"
+    fake_env["FAKE_OIDC_CLIENT_ASSERTION_PUBLIC_KEY"] = str(public_key_path)
     fake_as = _start_process(
         [
             sys.executable,
@@ -215,12 +242,12 @@ def _start_companion_server(server_port: int, issuer: str) -> _RunningProcess:
 
 
 @pytest.fixture
-async def topology() -> AsyncIterator[_Topology]:
+async def topology(machine_key: _MachineKey) -> AsyncIterator[_Topology]:
     """Start the fake OIDC AS and real companion MCP server on ephemeral localhost ports."""
     as_port = _free_port()
     server_port = _free_port()
     issuer = f"http://127.0.0.1:{as_port}"
-    fake_as = _start_fake_as(as_port)
+    fake_as = _start_fake_as(as_port, machine_key.public_key_path)
     try:
         server = _start_companion_server(server_port, issuer)
         try:
@@ -244,13 +271,15 @@ class _SubstitutedTopology:
 
 
 @pytest.fixture
-async def substituted_topology() -> AsyncIterator[_SubstitutedTopology]:
+async def substituted_topology(
+    machine_key: _MachineKey,
+) -> AsyncIterator[_SubstitutedTopology]:
     """Trusted AS ``A`` for the client; the companion server trusts and advertises AS ``B``."""
     trusted_port, rogue_port, server_port = _free_port(), _free_port(), _free_port()
     rogue_issuer = f"http://127.0.0.1:{rogue_port}"
-    trusted = _start_fake_as(trusted_port)
+    trusted = _start_fake_as(trusted_port, machine_key.public_key_path)
     try:
-        rogue = _start_fake_as(rogue_port)
+        rogue = _start_fake_as(rogue_port, machine_key.public_key_path)
         try:
             server = _start_companion_server(server_port, rogue_issuer)
             try:
@@ -422,6 +451,7 @@ async def test_full_oauth_flow_reaches_whoami_over_mcp_2026(topology: _Topology)
         "authorization_scopes": [_REQUIRED_SCOPE],
         "client_credentials_exchanges": 0,
         "client_credentials_scopes": [],
+        "accepted_client_assertions": [],
     }
 
 
@@ -475,6 +505,7 @@ async def test_cimd_first_flow_skips_dynamic_client_registration(
         "authorization_scopes": [_REQUIRED_SCOPE],
         "client_credentials_exchanges": 0,
         "client_credentials_scopes": [],
+        "accepted_client_assertions": [],
     }
 
 
@@ -524,6 +555,7 @@ async def test_runtime_scope_step_up_preserves_prior_grant_and_completes_health(
         "authorization_scopes": [_REQUIRED_SCOPE, expected_union],
         "client_credentials_exchanges": 0,
         "client_credentials_scopes": [],
+        "accepted_client_assertions": [],
     }
 
 
@@ -579,6 +611,7 @@ async def test_client_credentials_flow_is_non_interactive_and_steps_up_scopes(
         "authorization_scopes": [],
         "client_credentials_exchanges": 2,
         "client_credentials_scopes": [_REQUIRED_SCOPE, expected_union],
+        "accepted_client_assertions": [],
     }
 
 
@@ -615,7 +648,108 @@ async def test_client_credentials_rejects_an_invalid_secret_without_leaking_it(
         "authorization_scopes": [],
         "client_credentials_exchanges": 0,
         "client_credentials_scopes": [],
+        "accepted_client_assertions": [],
     }
+
+
+def _private_key_jwt_settings(server_url: str, issuer: str, key_path: Path) -> Settings:
+    return Settings(
+        auth_provider="generic",
+        auth_mode="client_credentials",
+        client_auth_method="private_key_jwt",
+        server_url=server_url,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+        client_credentials_client_id=_ASSERTION_CLIENT_ID,
+        client_credentials_private_key_path=key_path,
+        client_credentials_issuer=issuer,
+    )
+
+
+async def test_private_key_jwt_flow_is_non_interactive_and_steps_up_scopes(
+    topology: _Topology, machine_key: _MachineKey
+) -> None:
+    """Authenticate with an SDK-signed, issuer-audience client assertion and no shared secret."""
+    settings = _private_key_jwt_settings(
+        topology.server_url, topology.issuer, machine_key.private_key_path
+    )
+    storage = InMemoryTokenStorage()
+    provider = await build_oauth_provider(settings, storage=storage)
+
+    async with (
+        httpx2.AsyncClient(auth=provider, follow_redirects=True, timeout=30.0) as http_client,
+        build_mcp_client(settings, http_client=http_client) as client,
+    ):
+        assert client.protocol_version == _PROTOCOL_VERSION
+        initial_identity = await client.call_tool("whoami")
+        health = await client.call_tool("health")
+        elevated_identity = await client.call_tool("whoami")
+
+    assert initial_identity.structured_content == {
+        "authenticated": True,
+        "client_id": _ASSERTION_CLIENT_ID,
+        "subject": _ASSERTION_CLIENT_ID,
+        "scopes": [_REQUIRED_SCOPE],
+    }
+    assert health.structured_content == {"status": "ok"}
+    assert elevated_identity.structured_content is not None
+    assert elevated_identity.structured_content["scopes"] == [_REQUIRED_SCOPE, _HEALTH_SCOPE]
+    assert await storage.get_client_info() is None
+
+    state = await _json_request("GET", f"{topology.issuer}/__test__/state")
+    assert state["registrations"] == 0
+    assert state["client_credentials_exchanges"] == 2
+    assert (
+        state["accepted_client_assertions"]
+        == [
+            {
+                "iss": _ASSERTION_CLIENT_ID,
+                "sub": _ASSERTION_CLIENT_ID,
+                "aud": topology.issuer,
+                "lifetime": 60,
+            }
+        ]
+        * 2
+    )
+    token_requests = [
+        request for request in await _journal(topology.issuer) if request["path"] == "/token"
+    ]
+    assert len(token_requests) == 2
+    key_pem = machine_key.private_key_path.read_text()
+    for request in token_requests:
+        assert "authorization" not in cast(dict[str, str], request["headers"])
+        assert "client_secret" not in cast(str, request["body"])
+        assert key_pem not in json.dumps(request)
+
+
+async def test_private_key_jwt_with_an_unregistered_key_fails_closed_without_leaking_it(
+    topology: _Topology,
+) -> None:
+    """An assertion signed by an unregistered key is refused; the key never reaches errors."""
+    with secure_key_dir() as key_dir:
+        stray = write_key(key_dir / "stray.pem", pem(rsa_key()))
+        settings = _private_key_jwt_settings(topology.server_url, topology.issuer, stray)
+        provider = await build_oauth_provider(settings, storage=InMemoryTokenStorage())
+
+        with pytest.RaisesGroup(
+            OAuthFlowError, allow_unwrapped=True, flatten_subgroups=True
+        ) as raised:
+            async with (
+                httpx2.AsyncClient(
+                    auth=provider, follow_redirects=True, timeout=30.0
+                ) as http_client,
+                build_mcp_client(settings, http_client=http_client),
+            ):
+                pytest.fail("an unregistered client key unexpectedly authenticated")
+        stray_pem = stray.read_text()
+
+    rendered = f"{raised.value!s} {raised.value!r}"
+    for line in stray_pem.splitlines():
+        if not line.startswith("-----"):
+            assert line not in rendered
+    state = await _json_request("GET", f"{topology.issuer}/__test__/state")
+    assert state["token_exchanges"] == 0
+    assert state["accepted_client_assertions"] == []
 
 
 async def _journal(issuer: str) -> list[dict[str, object]]:
