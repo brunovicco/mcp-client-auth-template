@@ -26,8 +26,13 @@ ghcr.io/brunovicco/mcp-server-auth-template@sha256:4a220992b5df2382b2f821713b8b4
 ```
 
 A demo reutiliza exatamente o cenário do P1.7a e prova MCP `2026-07-28`, Authorization Code + PKCE
-CIMD-first, catálogo protegido no acesso anônimo, `whoami` autenticado, step-up limitado via
-`health`, rejeição de audience incorreta e ausência de sessão MCP.
+CIMD-first, desafio `401` para `tools/list` sem token, visão de `tools/list` por scope atualizada
+após o step-up, `whoami` autenticado, step-up limitado via `health`, rejeição de audience incorreta
+e ausência de sessão MCP.
+
+A imagem pinada é anterior à correção v0.7.0 do `tools/list` no resultado de wire do server
+companheiro, e a assertion de catálogo por scope depende dela. Até o release do par mover o digest
+para a imagem v0.7.0 do server, esta demo falha na etapa de catálogo.
 
 O resumo JSON identifica a topologia como `docker-compose-shared-loopback`.
 

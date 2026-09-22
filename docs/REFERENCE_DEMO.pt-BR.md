@@ -35,6 +35,10 @@ Para saída legível por máquina:
 O wrapper sincroniza o ambiente travado do client, instala o server local nesse ambiente e executa
 a demo. Não é necessário cloud account, IdP real, browser, credencial de produção ou Docker daemon.
 
+As assertions de catálogo exigem um server companheiro com a correção v0.7.0 do `tools/list` no
+resultado de wire. Servers anteriores devolviam catálogo vazio para qualquer chamador, e o antigo
+teste de "catálogo anônimo vazio" confundia isso com proteção.
+
 ## O que a demo prova
 
 A demo sobe os dois serviços locais em portas loopback efêmeras e executa:
@@ -48,12 +52,15 @@ client MCP real
   -> Authorization Code + PKCE
   -> validação do issuer da resposta conforme RFC 9207
   -> access token vinculado ao resource conforme RFC 8707
+  -> tools/list sem token: 401 + desafio resource_metadata
+  -> tools/list autenticado (SDK real): {whoami}
   -> whoami autenticado
   -> health
   -> 403 insufficient_scope
   -> reautorização limitada com scope anterior + health
   -> health com sucesso
   -> whoami elevado
+  -> tools/list atualizado após o step-up: {whoami, health}
   -> JWT propositalmente emitido para audience errada
   -> rejeição 401
   -> probe com Mcp-Session-Id de aparência legada
@@ -69,6 +76,10 @@ Os contadores do authorization server também são validados. A evidência esper
 - scope elevado `mcp:tools:call mcp:tools:health`;
 - audience de recurso incorreta rejeitada com HTTP `401`;
 - protocolo MCP negociado exatamente `2026-07-28`;
+- `tools/list` sem token respondido com `401` e desafio `resource_metadata`;
+- catálogo autorizado `{whoami}` no scope inicial e `{whoami, health}` após o step-up (comparação
+  como conjunto; o cache privado do SDK é atualizado explicitamente porque o contexto de
+  autorização mudou);
 - nenhum `Mcp-Session-Id` retornado.
 
 ## Saída
@@ -79,6 +90,7 @@ Uma execução bem-sucedida termina com:
 P1.7a REFERENCE DEMO PASSED
 OAuth:    CIMD-first Authorization Code + PKCE
 MCP:      2026-07-28, authenticated whoami + health
+Catalog:  401 without a token; tools/list filtered per scope, refreshed on step-up
 Step-up:  mcp:tools:call -> + mcp:tools:health
 Audience: wrong-resource JWT rejected with HTTP 401
 State:    no protocol-level session minted

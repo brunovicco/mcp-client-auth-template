@@ -33,6 +33,33 @@ The gate covers lock consistency, Ruff, formatting, architecture, supply-chain c
 governance baseline, vendored loop-schema validation, strict Mypy, pytest/coverage, Bandit and
 dependency audit.
 
+### Test layers
+
+| Layer | Location | Runs in the gate | Purpose |
+| --- | --- | --- | --- |
+| Unit | `tests/unit` | yes | Settings, adapters, policies; hand-built SDK objects allowed only as auxiliary evidence |
+| Integration (real wire) | `tests/integration` | yes | Real MCP SDK client and SDK `MCPServer` over loopback sockets, with journaling fake authorization servers |
+| Cross-repository E2E | `tests/e2e` | opt-in (`MCP_E2E_SERVER_ROOT`) | The real companion server plus the fake OIDC authorization server |
+
+Protocol, authorization, cache, and interoperability claims need a `tests/integration` or
+`tests/e2e` test. `tests/unit/test_wire_evidence_hygiene.py` fails if those suites construct MCP
+result objects by hand.
+
+`mcp.MCPDeprecationWarning` is promoted to an error by `pyproject.toml`. Resolve an SDK deprecation;
+do not filter it. Other deprecation classes are not promoted.
+
+Tests that need a `private_key_jwt` key write it below the git-ignored `build/` directory
+(`tests/key_material.py`). The key loader rejects group/world-writable ancestors, so on Linux
+`tmp_path` (under `/tmp`) cannot be used.
+
+To run the E2E suite without touching the project `.venv`, use a disposable environment:
+
+```bash
+UV_PROJECT_ENVIRONMENT=/tmp/mcp-e2e-venv uv sync --frozen --all-groups
+uv pip install --python /tmp/mcp-e2e-venv/bin/python -e ../mcp-server-auth-template
+MCP_E2E_SERVER_ROOT=../mcp-server-auth-template /tmp/mcp-e2e-venv/bin/pytest -m e2e tests/e2e --no-cov
+```
+
 ## Reference demos
 
 P1.7a uses the real companion server checkout:
@@ -41,7 +68,9 @@ P1.7a uses the real companion server checkout:
 ./scripts/run_reference_demo.sh --server-root /path/to/mcp-server-auth-template
 ```
 
-P1.7b is containerized and consumes the published Server `v0.5.0` image by immutable digest:
+P1.7b is containerized and consumes a published Server image by immutable digest. It shares the
+P1.7a scenario, including the per-scope `tools/list` assertions, which need a server image with the
+v0.7.0 `tools/list` fix. The digest moves to that image at the pair release:
 
 ```bash
 ./scripts/run_compose_demo.sh

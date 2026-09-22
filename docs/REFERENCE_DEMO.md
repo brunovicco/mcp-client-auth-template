@@ -36,6 +36,10 @@ The wrapper syncs the locked client environment, installs the local companion se
 environment, and then runs the demo. No cloud account, real identity provider, browser, production
 credential, or Docker daemon is required.
 
+The catalog assertions need a companion server that includes the v0.7.0 `tools/list` wire-result
+fix. Earlier servers returned an empty catalog to every caller, which the former "anonymous catalog
+is empty" check mistook for protection.
+
 ## What it proves
 
 The demo starts both local services on ephemeral loopback ports and then executes this sequence:
@@ -49,12 +53,15 @@ real MCP client
   -> Authorization Code + PKCE
   -> RFC 9207 authorization-response issuer validation
   -> RFC 8707 resource-bound access token
+  -> unauthenticated tools/list: 401 + resource_metadata challenge
+  -> authenticated tools/list (real SDK): {whoami}
   -> authenticated whoami
   -> health
   -> 403 insufficient_scope
   -> bounded reauthorization with prior + health scope
   -> successful health
   -> elevated whoami
+  -> tools/list refreshed after step-up: {whoami, health}
   -> deliberately wrong-audience JWT
   -> 401 rejection
   -> legacy-looking Mcp-Session-Id probe
@@ -70,6 +77,10 @@ The authorization-server counters are also checked. The expected evidence is:
 - elevated scope `mcp:tools:call mcp:tools:health`;
 - wrong resource audience rejected with HTTP `401`;
 - negotiated MCP protocol exactly `2026-07-28`;
+- unauthenticated `tools/list` answered with `401` and a `resource_metadata` challenge;
+- authorized catalog `{whoami}` at the initial scope and `{whoami, health}` after step-up (set
+  comparison; the private SDK cache is refreshed explicitly because the authorization context
+  changed);
 - no `Mcp-Session-Id` returned.
 
 ## Output
@@ -80,6 +91,7 @@ A successful human-readable run ends with:
 P1.7a REFERENCE DEMO PASSED
 OAuth:    CIMD-first Authorization Code + PKCE
 MCP:      2026-07-28, authenticated whoami + health
+Catalog:  401 without a token; tools/list filtered per scope, refreshed on step-up
 Step-up:  mcp:tools:call -> + mcp:tools:health
 Audience: wrong-resource JWT rejected with HTTP 401
 State:    no protocol-level session minted
