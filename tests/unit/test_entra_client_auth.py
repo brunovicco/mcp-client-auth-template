@@ -189,3 +189,48 @@ async def test_prm_cannot_redirect_oauth_discovery_to_an_unexpected_authorizatio
     )
     with pytest.raises(OAuthFlowError, match="authorization-server pin mismatch"):
         await flow.asend(prm_response)
+
+
+async def test_sdk_followed_redirects_stay_inside_the_pinned_tenant() -> None:
+    """SDK 2.2 follows same-origin redirects inside its auth flow; the pin still sees each hop.
+
+    Driven through a real ``httpx2.AsyncClient`` because only the client builds the
+    ``next_request`` that the SDK's redirect-aware auth flow follows.
+    """
+    other_tenant = "22222222-2222-2222-2222-222222222222"
+    seen: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(f"{request.method} {request.url}")
+        if request.url.host == "mcp.example.invalid" and request.url.path == "/mcp":
+            return httpx2.Response(
+                401,
+                headers={
+                    "WWW-Authenticate": (
+                        'Bearer resource_metadata="https://mcp.example.invalid/'
+                        '.well-known/oauth-protected-resource"'
+                    )
+                },
+            )
+        if request.url.path == "/.well-known/oauth-protected-resource":
+            return httpx2.Response(
+                200, json={"resource": _SERVER_URL, "authorization_servers": [_EXPECTED_ISSUER]}
+            )
+        if request.url.path.startswith(f"/{_TENANT_ID}/"):
+            return httpx2.Response(
+                307,
+                headers={
+                    "Location": (
+                        f"https://login.microsoftonline.com/{other_tenant}/v2.0/"
+                        ".well-known/openid-configuration"
+                    )
+                },
+            )
+        return httpx2.Response(404)
+
+    provider = await _build(InMemoryTokenStorage())
+    async with httpx2.AsyncClient(auth=provider, transport=httpx2.MockTransport(handler)) as client:
+        with pytest.raises(OAuthFlowError, match="unexpected authorization-server endpoint"):
+            await client.post(f"{_SERVER_URL}/mcp")
+
+    assert not any(other_tenant in entry for entry in seen)

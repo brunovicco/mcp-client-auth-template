@@ -8,7 +8,7 @@ dependencies = [
     "pydantic>=2.11",
     "pydantic-settings>=2.8",
     "structlog>=25.1",
-    "mcp>=2.0,<3",
+    "mcp>=2.2,<3",
     "anyio>=4.8",
     # Observability: see docs/OBSERVABILITY.md and docs/adr/0019-native-mcp-v2-observability.md.
     # Network-silent by default (ObservabilitySettings.enabled=False); a core dependency because
