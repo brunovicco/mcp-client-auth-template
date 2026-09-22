@@ -4,6 +4,9 @@
 - Date: 2026-08-09
 - Supersedes: ADR-0004 decision 6 for generic OIDC only
 
+> Amended by ADR-0024: the pre-registered credential is bound to an explicit, mandatory
+> authorization-server issuer (`MCP_CLIENT_CLIENT_CREDENTIALS_ISSUER`) passed to the SDK.
+
 ## Context
 
 The interactive authorization-code path cannot serve unattended workers, scheduled jobs, or

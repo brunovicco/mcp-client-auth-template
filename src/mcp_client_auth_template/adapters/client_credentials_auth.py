@@ -16,9 +16,15 @@ def build_client_credentials_oauth_provider(
     storage: TokenStorage,
     client_id: str,
     client_secret: str,
+    issuer: str,
     scope: str,
 ) -> ClientCredentialsOAuthProvider:
-    """Build the SDK provider with pre-registered credentials and HTTP Basic auth."""
+    """Build the SDK provider with pre-registered credentials and HTTP Basic auth.
+
+    ``issuer`` binds the credential to one authorization server: the SDK builds a token
+    request only from metadata discovered for exactly that issuer, and stops before sending
+    anything if the MCP server's Protected Resource Metadata leads elsewhere (ADR-0024).
+    """
     return ClientCredentialsOAuthProvider(
         server_url=server_url,
         storage=storage,
@@ -26,4 +32,5 @@ def build_client_credentials_oauth_provider(
         client_secret=client_secret,
         token_endpoint_auth_method=_TOKEN_ENDPOINT_AUTH_METHOD,
         scope=scope,
+        issuer=issuer,
     )

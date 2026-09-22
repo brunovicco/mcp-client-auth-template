@@ -71,6 +71,15 @@ def validate_production_settings(settings: Settings, environment: str) -> list[P
         settings.generic_client_metadata_url
     ):
         issues.append(PreflightIssue("generic_client_metadata_url", "placeholder_host_not_allowed"))
+    if settings.client_credentials_issuer is not None:
+        if urlsplit(settings.client_credentials_issuer).scheme != "https":
+            issues.append(
+                PreflightIssue("client_credentials_issuer", "https_required_in_production")
+            )
+        if _placeholder_host(settings.client_credentials_issuer):
+            issues.append(
+                PreflightIssue("client_credentials_issuer", "placeholder_host_not_allowed")
+            )
     return issues
 
 

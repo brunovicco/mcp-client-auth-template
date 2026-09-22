@@ -123,6 +123,7 @@ async def build_oauth_provider(
     """
     if settings.auth_mode == "client_credentials":
         client_id = cast(str, settings.client_credentials_client_id)
+        issuer = cast(str, settings.client_credentials_issuer)
         secret = settings.client_credentials_secret
         if secret is None:  # pragma: no cover - Settings validates this invariant
             raise RuntimeError("client credentials settings were not validated")
@@ -131,6 +132,7 @@ async def build_oauth_provider(
             storage=storage,
             client_id=client_id,
             client_secret=secret.get_secret_value(),
+            issuer=issuer,
             scope=settings.scope,
         )
 

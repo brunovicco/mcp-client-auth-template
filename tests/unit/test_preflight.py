@@ -58,6 +58,39 @@ def test_production_preflight_rejects_placeholder_identifiers() -> None:
     assert [issue.location for issue in issues] == ["entra_tenant_id", "entra_client_id"]
 
 
+def _machine_settings(issuer: str, **overrides: object) -> Settings:
+    return _production_settings(
+        auth_provider="generic",
+        auth_mode="client_credentials",
+        client_credentials_client_id="machine-client",
+        client_credentials_secret="unit-test-credential",
+        client_credentials_issuer=issuer,
+        **overrides,
+    )
+
+
+def test_production_preflight_accepts_a_real_https_machine_issuer() -> None:
+    settings = _machine_settings("https://login.acme.com/oauth2")
+
+    assert validate_production_settings(settings, "production") == []
+
+
+def test_production_preflight_rejects_loopback_or_placeholder_machine_issuer() -> None:
+    loopback = _machine_settings("http://127.0.0.1:9000", oauth_allow_insecure_loopback=True)
+    placeholder = _machine_settings("https://as.example.invalid")
+
+    loopback_issues = {
+        (issue.location, issue.type)
+        for issue in validate_production_settings(loopback, "production")
+    }
+    placeholder_issues = validate_production_settings(placeholder, "production")
+
+    assert ("client_credentials_issuer", "https_required_in_production") in loopback_issues
+    assert [(issue.location, issue.type) for issue in placeholder_issues] == [
+        ("client_credentials_issuer", "placeholder_host_not_allowed")
+    ]
+
+
 def test_cli_failure_is_sanitized(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

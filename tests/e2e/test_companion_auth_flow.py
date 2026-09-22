@@ -484,6 +484,7 @@ async def test_client_credentials_flow_is_non_interactive_and_steps_up_scopes(
         token_storage_path=None,
         oauth_allow_insecure_loopback=True,
         client_credentials_client_id=_MACHINE_CLIENT_ID,
+        client_credentials_issuer=topology.issuer,
         client_credentials_secret=_MACHINE_CLIENT_CREDENTIAL,
     )
     storage = InMemoryTokenStorage()
@@ -539,6 +540,7 @@ async def test_client_credentials_rejects_an_invalid_secret_without_leaking_it(
         token_storage_path=None,
         oauth_allow_insecure_loopback=True,
         client_credentials_client_id=_MACHINE_CLIENT_ID,
+        client_credentials_issuer=topology.issuer,
         client_credentials_secret=invalid_credential,
     )
     provider = await build_oauth_provider(settings, storage=InMemoryTokenStorage())
