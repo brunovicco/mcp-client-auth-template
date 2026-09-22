@@ -14,6 +14,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _ISSUER = os.environ["FAKE_OIDC_ISSUER"].rstrip("/")
 _KID = "mcp-e2e-rsa-1"
@@ -32,6 +33,9 @@ _CLIENT_ID_METADATA_DOCUMENT_SUPPORTED = False
 _CIMD_CLIENT_ID = "https://client.example.invalid/oauth/client-metadata.json"
 _MACHINE_CLIENT_ID = "mcp-e2e-machine"
 _MACHINE_CLIENT_CREDENTIAL = "e2e-test-credential"
+# Every non-test-control request as received. The E2E suite reads it back to prove what did,
+# and did not, cross the wire; it only ever holds throwaway local test credentials.
+_REQUEST_JOURNAL: list[dict[str, object]] = []
 
 
 def _b64url_uint(value: int) -> str:
@@ -325,6 +329,51 @@ async def mint(request: Request) -> Response:
     )
 
 
+async def requests_journal(_: Request) -> Response:
+    """Expose every non-test-control request this server received, verbatim."""
+    return JSONResponse({"requests": list(_REQUEST_JOURNAL)})
+
+
+class _Journal:
+    """Record each HTTP request (method, path, headers, body) before routing it."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["path"].startswith("/__test__/"):
+            await self._app(scope, receive, send)
+            return
+        chunks: list[bytes] = []
+        more = True
+        while more:
+            message = await receive()
+            chunks.append(message.get("body", b""))
+            more = message.get("more_body", False)
+        body = b"".join(chunks)
+        _REQUEST_JOURNAL.append(
+            {
+                "method": scope["method"],
+                "path": scope["path"],
+                "headers": {
+                    key.decode("latin-1").lower(): value.decode("latin-1")
+                    for key, value in scope["headers"]
+                },
+                "body": body.decode("utf-8", errors="replace"),
+            }
+        )
+        delivered = False
+
+        async def replay() -> Message:
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        await self._app(scope, replay, send)
+
+
 async def state(_: Request) -> Response:
     """Expose aggregate counters used to prove the real DCR/authorization/token path ran."""
     return JSONResponse(
@@ -339,16 +388,19 @@ async def state(_: Request) -> Response:
     )
 
 
-app = Starlette(
-    routes=[
-        Route("/.well-known/openid-configuration", metadata, methods=["GET"]),
-        Route("/.well-known/oauth-authorization-server", metadata, methods=["GET"]),
-        Route("/jwks", jwks, methods=["GET"]),
-        Route("/register", register, methods=["POST"]),
-        Route("/authorize", authorize, methods=["GET"]),
-        Route("/token", token, methods=["POST"]),
-        Route("/__test__/configure", configure, methods=["POST"]),
-        Route("/__test__/mint", mint, methods=["POST"]),
-        Route("/__test__/state", state, methods=["GET"]),
-    ]
+app = _Journal(
+    Starlette(
+        routes=[
+            Route("/.well-known/openid-configuration", metadata, methods=["GET"]),
+            Route("/.well-known/oauth-authorization-server", metadata, methods=["GET"]),
+            Route("/jwks", jwks, methods=["GET"]),
+            Route("/register", register, methods=["POST"]),
+            Route("/authorize", authorize, methods=["GET"]),
+            Route("/token", token, methods=["POST"]),
+            Route("/__test__/configure", configure, methods=["POST"]),
+            Route("/__test__/mint", mint, methods=["POST"]),
+            Route("/__test__/state", state, methods=["GET"]),
+            Route("/__test__/requests", requests_journal, methods=["GET"]),
+        ]
+    )
 )

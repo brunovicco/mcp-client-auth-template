@@ -95,6 +95,22 @@ def build_secure_http_transport(
     return TracingAsyncTransport.wrap(secure_transport, observability)
 
 
+def build_http_client(
+    settings: Settings,
+    *,
+    oauth_provider: OAuthClientProvider,
+    transport: httpx2.AsyncBaseTransport,
+) -> httpx2.AsyncClient:
+    """Build the one HTTP client shared by OAuth and MCP traffic, with its budgets."""
+    return httpx2.AsyncClient(
+        auth=oauth_provider,
+        follow_redirects=True,
+        max_redirects=settings.oauth_max_redirects,
+        timeout=build_http_timeout(settings),
+        transport=transport,
+    )
+
+
 def build_observability_settings() -> ObservabilitySettings:
     """Build this demo's observability identity; export/logging config comes from the environment.
 
@@ -254,13 +270,7 @@ async def run_demo() -> None:
             settings, policy=network_policy, observability=observability
         )
         http_client = await exit_stack.enter_async_context(
-            httpx2.AsyncClient(
-                auth=oauth_provider,
-                follow_redirects=True,
-                max_redirects=settings.oauth_max_redirects,
-                timeout=build_http_timeout(settings),
-                transport=transport,
-            )
+            build_http_client(settings, oauth_provider=oauth_provider, transport=transport)
         )
         client = await exit_stack.enter_async_context(
             build_mcp_client(settings, http_client=http_client)

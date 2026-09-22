@@ -139,16 +139,10 @@ def _wait_for_port(port: int, process: _RunningProcess, *, timeout_seconds: floa
     pytest.fail(f"timed out waiting for localhost:{port}")
 
 
-@pytest.fixture
-async def topology() -> AsyncIterator[_Topology]:
-    """Start the fake OIDC AS and real companion MCP server on ephemeral localhost ports."""
-    as_port = _free_port()
-    server_port = _free_port()
-    issuer = f"http://127.0.0.1:{as_port}"
-    server_url = f"http://127.0.0.1:{server_port}"
-
+def _start_fake_as(as_port: int) -> _RunningProcess:
+    """Start one fake OIDC AS process whose issuer is its own localhost URL."""
     fake_env = os.environ.copy()
-    fake_env["FAKE_OIDC_ISSUER"] = issuer
+    fake_env["FAKE_OIDC_ISSUER"] = f"http://127.0.0.1:{as_port}"
     fake_as = _start_process(
         [
             sys.executable,
@@ -169,48 +163,108 @@ async def topology() -> AsyncIterator[_Topology]:
     )
     try:
         _wait_for_port(as_port, fake_as)
+    except BaseException:
+        fake_as.stop()
+        raise
+    return fake_as
 
-        server_env = os.environ.copy()
-        existing_pythonpath = server_env.get("PYTHONPATH")
-        server_src = str(_SERVER_ROOT / "src")
-        server_env["PYTHONPATH"] = (
-            f"{server_src}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else server_src
-        )
-        server_env.update(
-            {
-                "MCP_SERVER_RESOURCE_SERVER_URL": f"{server_url}/",
-                "MCP_SERVER_REQUIRED_SCOPES": json.dumps([_REQUIRED_SCOPE]),
-                "MCP_SERVER_AUTH_PROVIDER": "generic",
-                "MCP_SERVER_GENERIC_ISSUER_URL": issuer,
-                "MCP_SERVER_GENERIC_AUDIENCE": f"{server_url}/",
-                "MCP_SERVER_OIDC_ALLOW_INSECURE_LOOPBACK": "true",
-                "LOG_LEVEL": "WARNING",
-            }
-        )
-        server = _start_process(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "mcp_server_auth_template.entrypoints.mcp_server:create_app",
-                "--factory",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(server_port),
-                "--log-level",
-                "warning",
-            ],
-            cwd=_SERVER_ROOT,
-            env=server_env,
-        )
+
+def _start_companion_server(server_port: int, issuer: str) -> _RunningProcess:
+    """Start the real companion MCP server trusting ``issuer`` as its authorization server."""
+    server_url = f"http://127.0.0.1:{server_port}"
+    server_env = os.environ.copy()
+    existing_pythonpath = server_env.get("PYTHONPATH")
+    server_src = str(_SERVER_ROOT / "src")
+    server_env["PYTHONPATH"] = (
+        f"{server_src}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else server_src
+    )
+    server_env.update(
+        {
+            "MCP_SERVER_RESOURCE_SERVER_URL": f"{server_url}/",
+            "MCP_SERVER_REQUIRED_SCOPES": json.dumps([_REQUIRED_SCOPE]),
+            "MCP_SERVER_AUTH_PROVIDER": "generic",
+            "MCP_SERVER_GENERIC_ISSUER_URL": issuer,
+            "MCP_SERVER_GENERIC_AUDIENCE": f"{server_url}/",
+            "MCP_SERVER_OIDC_ALLOW_INSECURE_LOOPBACK": "true",
+            "LOG_LEVEL": "WARNING",
+        }
+    )
+    server = _start_process(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "mcp_server_auth_template.entrypoints.mcp_server:create_app",
+            "--factory",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(server_port),
+            "--log-level",
+            "warning",
+        ],
+        cwd=_SERVER_ROOT,
+        env=server_env,
+    )
+    try:
+        _wait_for_port(server_port, server)
+    except BaseException:
+        server.stop()
+        raise
+    return server
+
+
+@pytest.fixture
+async def topology() -> AsyncIterator[_Topology]:
+    """Start the fake OIDC AS and real companion MCP server on ephemeral localhost ports."""
+    as_port = _free_port()
+    server_port = _free_port()
+    issuer = f"http://127.0.0.1:{as_port}"
+    fake_as = _start_fake_as(as_port)
+    try:
+        server = _start_companion_server(server_port, issuer)
         try:
-            _wait_for_port(server_port, server)
-            yield _Topology(issuer=issuer, server_url=server_url, fake_as=fake_as, server=server)
+            yield _Topology(
+                issuer=issuer,
+                server_url=f"http://127.0.0.1:{server_port}",
+                fake_as=fake_as,
+                server=server,
+            )
         finally:
             server.stop()
     finally:
         fake_as.stop()
+
+
+@dataclass(frozen=True)
+class _SubstitutedTopology:
+    trusted_issuer: str
+    rogue_issuer: str
+    server_url: str
+
+
+@pytest.fixture
+async def substituted_topology() -> AsyncIterator[_SubstitutedTopology]:
+    """Trusted AS ``A`` for the client; the companion server trusts and advertises AS ``B``."""
+    trusted_port, rogue_port, server_port = _free_port(), _free_port(), _free_port()
+    rogue_issuer = f"http://127.0.0.1:{rogue_port}"
+    trusted = _start_fake_as(trusted_port)
+    try:
+        rogue = _start_fake_as(rogue_port)
+        try:
+            server = _start_companion_server(server_port, rogue_issuer)
+            try:
+                yield _SubstitutedTopology(
+                    trusted_issuer=f"http://127.0.0.1:{trusted_port}",
+                    rogue_issuer=rogue_issuer,
+                    server_url=f"http://127.0.0.1:{server_port}",
+                )
+            finally:
+                server.stop()
+        finally:
+            rogue.stop()
+    finally:
+        trusted.stop()
 
 
 async def _json_request(
@@ -562,6 +616,57 @@ async def test_client_credentials_rejects_an_invalid_secret_without_leaking_it(
         "client_credentials_exchanges": 0,
         "client_credentials_scopes": [],
     }
+
+
+async def _journal(issuer: str) -> list[dict[str, object]]:
+    """Every request the fake AS at ``issuer`` received, excluding test-control calls."""
+    body = await _json_request("GET", f"{issuer}/__test__/requests")
+    requests = body["requests"]
+    assert isinstance(requests, list)
+    return cast(list[dict[str, object]], requests)
+
+
+async def test_machine_credential_never_reaches_an_authorization_server_the_prm_substitutes(
+    substituted_topology: _SubstitutedTopology,
+) -> None:
+    """The companion server advertises AS B; the client is bound to A and must send B nothing."""
+    topology = substituted_topology
+    settings = Settings(
+        auth_provider="generic",
+        auth_mode="client_credentials",
+        server_url=topology.server_url,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+        client_credentials_client_id=_MACHINE_CLIENT_ID,
+        client_credentials_secret=_MACHINE_CLIENT_CREDENTIAL,
+        client_credentials_issuer=topology.trusted_issuer,
+    )
+    provider = await build_oauth_provider(settings, storage=InMemoryTokenStorage())
+
+    with pytest.RaisesGroup(
+        pytest.RaisesExc(OAuthFlowError, match="metadata issuer mismatch"),
+        allow_unwrapped=True,
+        flatten_subgroups=True,
+    ):
+        async with (
+            httpx2.AsyncClient(auth=provider, follow_redirects=True, timeout=30.0) as http_client,
+            build_mcp_client(settings, http_client=http_client),
+        ):
+            pytest.fail("the client connected through the substituted authorization server")
+
+    rogue_requests = await _journal(topology.rogue_issuer)
+    assert rogue_requests, "the substituted AS metadata should have been discovered"
+    for request in rogue_requests:
+        headers = cast(dict[str, str], request["headers"])
+        assert request["method"] == "GET"
+        assert request["path"] != "/token"
+        assert "authorization" not in headers
+        assert request["body"] == ""
+        assert _MACHINE_CLIENT_CREDENTIAL not in json.dumps(request)
+        assert _MACHINE_CLIENT_ID not in json.dumps(request)
+    rogue_state = await _json_request("GET", f"{topology.rogue_issuer}/__test__/state")
+    assert rogue_state["token_exchanges"] == 0
+    assert await _journal(topology.trusted_issuer) == []
 
 
 async def test_modern_request_envelope_integrity_and_sessionless_transport(
