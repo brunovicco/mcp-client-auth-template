@@ -9,9 +9,9 @@
 *[Read in English](README.md)*
 
 > Uma implementação de referência de autenticação para clientes MCP remotos, pensada para
-> produção: OAuth 2.1/OIDC, Authorization Code + PKCE, Client Credentials, discovery CIMD-first,
-> step-up controlado de scopes, resource binding exato, MCP stateless `2026-07-28` e evidência
-> ponta a ponta com OpenTelemetry.
+> produção: OAuth 2.1/OIDC, Authorization Code + PKCE, Client Credentials vinculado ao issuer
+> (`client_secret_basic` ou `private_key_jwt`), discovery CIMD-first, step-up controlado de scopes,
+> resource binding exato, MCP stateless `2026-07-28` e evidência ponta a ponta com OpenTelemetry.
 
 Use este repositório quando a dificuldade não é apenas "como chamar um servidor MCP?", mas **como
 fazer isso sem enfraquecer as fronteiras de identidade, token, transporte e observabilidade**. Ele
@@ -27,10 +27,16 @@ O caminho de referência valida comportamento real, não apenas configuração:
 - ✅ Protected Resource Metadata RFC 9728 e resource binding RFC 8707
 - ✅ validação de issuer da resposta de autorização conforme RFC 9207
 - ✅ step-up limitado de `403 insufficient_scope`, sem ampliar grants silenciosamente
-- ✅ tools protegidas ocultas do discovery anônimo
+- ✅ `tools/list` sem token recusado com desafio OAuth `401`; o catálogo autorizado é filtrado
+  por scope e atualizado após o step-up, comprovado pelo caminho real do SDK no wire
 - ✅ JWT com audience incorreta rejeitado com `401`
 - ✅ transporte MCP stateless `2026-07-28`, sem estado de `Mcp-Session-Id`
-- ✅ perfil opcional de Client Credentials para workloads OIDC sem usuário
+- ✅ perfil opcional de Client Credentials para serviços OIDC sem usuário, com
+  `client_secret_basic` ou `private_key_jwt` assimétrico
+- ✅ credenciais de máquina pré-provisionadas vinculadas a um issuer de authorization server
+  configurado: um authorization server substituto não recebe secret, assertion nem token
+- ✅ suíte de regressão fail-closed para PRM `429`/`5xx`, issuer divergente, redirects
+  cross-origin e tratamento de `403`, executada só com o SDK e com o transporte de produção
 - ✅ propagação W3C Trace Context entre cliente e servidor MCP
 - ✅ o mesmo trace distribuído validado positivamente no Collector e no Tempo
 - ✅ assertions de telemetria que excluem valores sensíveis de OAuth/MCP
@@ -39,7 +45,7 @@ O caminho de referência valida comportamento real, não apenas configuração:
 
 ```mermaid
 flowchart LR
-    User["Pessoa / workload"] --> Client["Cliente MCP"]
+    User["Pessoa / serviço"] --> Client["Cliente MCP"]
     Client -->|"OAuth 2.1 / OIDC<br/>Auth Code + PKCE ou Client Credentials"| AS["Authorization server"]
     Client -->|"MCP 2026-07-28<br/>bearer vinculado ao recurso"| Server["MCP resource server"]
     Server -.->|"desafio 401 / 403"| Client
@@ -69,9 +75,9 @@ O caminho mais rápido para avaliar o projeto é o cenário containerizado:
 ./scripts/run_compose_demo.sh
 ```
 
-Ele executa o cliente contra o Server companheiro `v0.5.0` publicado por digest imutável, realiza
-Authorization Code + PKCE CIMD-first, prova step-up de scope e tratamento de audience incorreta e
-termina com um banner determinístico de sucesso/falha.
+Ele executa o cliente contra o Server companheiro `v0.7.0` publicado por digest imutável, realiza
+Authorization Code + PKCE CIMD-first, prova a visão de `tools/list` por scope, step-up de scope e
+tratamento de audience incorreta e termina com um banner determinístico de sucesso/falha.
 
 Para a prova observável completa:
 
@@ -127,14 +133,35 @@ devem ser copiadas como defaults de produção.
 
 ## Modos de autenticação
 
-| Modo | Providers | Ciclo de vida da credencial | Uso típico |
-| --- | --- | --- | --- |
-| `interactive` | Entra ID ou OIDC genérico | Browser + PKCE; arquivo opcional de refresh token | Ferramentas de desenvolvimento, apps nativos/desktop e CLIs de operador |
-| `client_credentials` | Perfil determinístico OIDC genérico | Secret injetado no startup; access token fica em memória | CI, workers de backend e automações agendadas |
+O cliente separa autorização **humana/interativa** de autorização **máquina/service-to-service**.
+Grants, credenciais e políticas de storage são diferentes.
 
-OIDC genérico interativo usa CIMD primeiro e DCR apenas como fallback de compatibilidade. Entra usa
-cliente pré-registrado. O modo máquina não abre browser, não inicia callback loopback, não usa
-CIMD/DCR e não persiste credencial ou access token.
+### Humano / interativo: Authorization Code + PKCE (`MCP_CLIENT_AUTH_MODE=interactive`)
+
+| Perfil | Registro | Uso típico |
+| --- | --- | --- |
+| Microsoft Entra ID | Public client pré-registrado, authorization server pinado no tenant | Apps corporativos nativos/desktop, CLIs de operador |
+| OIDC genérico, CIMD | URL do Client ID Metadata Document como `client_id` (preferido) | Ferramentas de desenvolvimento com IdPs baseados em padrões |
+| OIDC genérico, fallback DCR | Dynamic Client Registration quando CIMD não é anunciado | Compatibilidade com authorization servers mais antigos |
+
+Usa browser e callback loopback. Tokens podem opcionalmente persistir em arquivo endurecido.
+
+### Máquina / service-to-service: Client Credentials (`MCP_CLIENT_AUTH_MODE=client_credentials`)
+
+| `MCP_CLIENT_CLIENT_AUTH_METHOD` | Credencial | Observações |
+| --- | --- | --- |
+| `client_secret_basic` (padrão) | Secret compartilhado injetado no startup | Opção de bootstrap, compatível com versões anteriores |
+| `private_key_jwt` | Arquivo de chave privada em secret mount; assertion de 60 s assinada pelo SDK | Sem secret compartilhado no authorization server |
+
+**Credenciais de máquina pré-provisionadas são vinculadas ao issuer.**
+`MCP_CLIENT_CLIENT_CREDENTIALS_ISSUER` é obrigatório, e o MCP SDK só envia a credencial para o
+metadata descoberto para exatamente esse issuer. Se o servidor MCP anunciar outro authorization
+server, o cliente aborta antes de qualquer secret ou assertion sair do processo
+([ADR-0024](docs/adr/0024-issuer-bound-machine-credentials.md),
+[ADR-0025](docs/adr/0025-private-key-jwt-machine-authentication.md)). O modo máquina não abre
+browser, não inicia callback loopback, não usa CIMD/DCR e não persiste credencial nem access token.
+Este perfil é apenas OIDC genérico. `private_key_jwt` é autenticação assimétrica de cliente e não é
+Workload Identity Federation, que continua sendo um item separado do roadmap.
 
 ## Propriedades de segurança
 
@@ -146,6 +173,11 @@ CIMD/DCR e não persiste credencial ou access token.
 - Arquivos POSIX de token exigem ownership/permissões privadas, rejeitam symlinks/hardlinks,
   limitam leitura e usam substituição atômica durável. Há opção em memória.
 - Client secrets usam `SecretStr`, permanecem em memória e são excluídos de falhas estruturadas.
+- Credenciais de máquina são vinculadas a um issuer configurado por meio do `issuer=` do SDK; um
+  authorization server substituto não recebe nada sensível.
+- Chaves `private_key_jwt` são lidas apenas de arquivo: sem symlink em nenhum componente do
+  caminho, permissões só do dono e diretórios do dono ou do root sem escrita para grupo/outros. A
+  chave nunca chega a logs, spans, erros ou storage de tokens.
 - Logs e traces excluem credenciais, authorization codes, payloads MCP, bodies, headers/URLs
   arbitrários, baggage, dados pessoais e texto de exceções.
 - GitHub Actions são pinadas por SHA e usam permissões read-only por padrão; escritas de release

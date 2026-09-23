@@ -109,7 +109,7 @@ class PinnedEntraOAuthClientProvider(OAuthClientProvider):
             redirect_handler=redirect_handler,
             callback_handler=callback_handler,
         )
-        self._expected_issuer = expected_issuer
+        self._pinned_issuer = expected_issuer
         self._expected_as_origin = _origin(expected_issuer)
         self._resource_origin = _origin(server_url)
         self._metadata_paths, self._token_path, self._authorization_path = _entra_paths(tenant_id)
@@ -138,7 +138,7 @@ class PinnedEntraOAuthClientProvider(OAuthClientProvider):
         if _origin(outbound_url) != self._expected_as_origin:
             raise OAuthFlowError(
                 "Entra authorization-server pin mismatch: "
-                f"expected {self._expected_issuer!r}, got {outbound_url!r}"
+                f"expected {self._pinned_issuer!r}, got {outbound_url!r}"
             )
 
         if outbound.method == "GET" and parsed.path in self._metadata_paths:

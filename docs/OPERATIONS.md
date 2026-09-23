@@ -26,10 +26,55 @@ Local file token storage remains single-user POSIX storage with the ownership an
 documented in ADR-0007. Use an OS keyring or secret-manager adapter instead when that filesystem
 contract is not appropriate.
 
-For `MCP_CLIENT_AUTH_MODE=client_credentials`, inject
-`MCP_CLIENT_CLIENT_CREDENTIALS_SECRET` at process start from a secret manager and rotate it on a
-deployment-specific schedule. This mode does not open a redirect listener and overrides token-file
-storage with in-memory storage; restarting the process discards its acquired access token.
+For `MCP_CLIENT_AUTH_MODE=client_credentials`, set `MCP_CLIENT_CLIENT_CREDENTIALS_ISSUER` to the
+exact issuer identifier published by the authorization server that provisioned the credential. It
+is mandatory. The MCP SDK compares it with discovered metadata as a simple string (a root issuer
+with or without its trailing slash counts as the same), so copy it from the server's
+`/.well-known/openid-configuration` or `oauth-authorization-server` document. If the MCP server
+advertises a different authorization server, the client exits with the authentication category
+before sending the credential anywhere. Production preflight requires HTTPS and rejects
+placeholder hosts.
+
+This mode does not open a redirect listener and overrides token-file storage with in-memory
+storage; restarting the process discards its acquired access token.
+
+### Machine client authentication
+
+| `MCP_CLIENT_CLIENT_AUTH_METHOD` | Configure | Rotate |
+| --- | --- | --- |
+| `client_secret_basic` (default) | Inject `MCP_CLIENT_CLIENT_CREDENTIALS_SECRET` at process start from a secret manager | Replace the secret at the authorization server and redeploy |
+| `private_key_jwt` | Register the public key with the authorization server; mount the private key and set `MCP_CLIENT_CLIENT_CREDENTIALS_PRIVATE_KEY_PATH` | Register the new public key, remount, restart, then retire the old key |
+
+The two methods are mutually exclusive. `private_key_jwt` sends a 60-second, SDK-signed assertion
+(`iss` = `sub` = client ID, `aud` = the authorization-server issuer, unique `jti`) and never a
+shared secret. The SDK emits no `kid`/`x5t` header, so register a single key for the client, or use
+an authorization server that tries each registered key. Entra certificate credentials are out of
+scope for this generic-OIDC profile.
+
+The private key is read once, at startup and by preflight, and must satisfy an SSH
+StrictModes-style policy (ADR-0025):
+
+- an absolute path with **no symbolic link** in any component;
+- every directory owned by the current user or root, and not group- or world-writable (world-writable
+  `/tmp` is therefore rejected);
+- the key file is a regular, single-link file owned by the current user or root, with mode `0600`
+  or `0400`, and at most 64 KiB;
+- an unencrypted PEM RSA key of at least 2048 bits (signed RS256) or P-256 EC key (ES256).
+
+A violation fails preflight with only `client_credentials_private_key_path:private_key_rejected`,
+and fails the CLI with the configuration exit code. File contents are never echoed.
+
+**Mounting the key.**
+
+- **Docker / Compose secrets** are regular files under `/run/secrets` and work as long as the file
+  mode is owner-only for the process user (for example `mode: 0400` with a matching `uid`).
+- **Kubernetes Secret volumes** expose each key as a symlink into a `..data` directory, so the
+  loader rejects them. Mounting the single key file with `subPath` presents a regular file and is
+  accepted. **Trade-off:** Kubernetes never updates `subPath` mounts when the Secret changes, so key
+  rotation requires restarting or redeploying the pod rather than happening automatically. Where
+  automatic rotation matters, use a CSI secret-store driver that writes regular files, or an init
+  container that copies the key into an `emptyDir` with `0400`. The symlink rule is intentionally
+  not relaxed to accommodate projected volumes.
 
 ## Operational budgets and cancellation
 
@@ -54,12 +99,12 @@ logging exception messages, response bodies, OAuth parameters, tokens, or tool r
 | Exit | Category | Examples |
 | ---: | --- | --- |
 | `0` | success | Both demo tool calls completed. |
-| `2` | configuration | Preflight rejected local settings. |
-| `3` | authentication | OAuth flow, registration, or token exchange failed. |
+| `2` | configuration | Preflight rejected local settings, or the `private_key_jwt` key file violated the key policy. |
+| `3` | authentication | OAuth flow, registration, or token exchange failed, including an authorization-server issuer mismatch or PRM `429`/`5xx`. |
 | `4` | network | DNS/egress policy, HTTP transport, or broken stream failed. |
 | `5` | timeout | An MCP tool exceeded its application deadline. |
 | `6` | local storage | Token-store ownership, permissions, links, or JSON were unsafe. |
-| `7` | tool | A tool returned `is_error=true`. |
+| `7` | tool | A tool returned `is_error=true`, or `whoami` was not in the principal's `tools/list` view. |
 | `8` | MCP protocol | The peer returned an MCP protocol error. |
 | `70` | internal | An unclassified software failure occurred. |
 | `130` | interrupted | The operator interrupted the process. |

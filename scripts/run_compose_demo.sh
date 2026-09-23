@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${ROOT}/compose.reference-demo.yml"
 PROJECT_NAME="${MCP_COMPOSE_PROJECT_NAME:-mcp-auth-reference-demo}"
-DEFAULT_SERVER_IMAGE="ghcr.io/brunovicco/mcp-server-auth-template@sha256:4a220992b5df2382b2f821713b8b4c840469e4465395cbdeb1349dee0f8a1110"
+DEFAULT_SERVER_IMAGE="ghcr.io/brunovicco/mcp-server-auth-template@sha256:097684a7a0302a849d979ceda201d82d71026186b44f2fa598d994abcdaeb17b"
 SERVER_IMAGE="${MCP_DEMO_SERVER_IMAGE:-$DEFAULT_SERVER_IMAGE}"
 
 die() {

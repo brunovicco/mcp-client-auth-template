@@ -10,8 +10,8 @@ from pathlib import Path
 
 SUPPORTED_PYTHON_MINORS = ("3.13", "3.14")
 REQUIRES_PYTHON = ">=3.13,<3.15"
-MCP_MINIMUM_VERSION = "2.0.0"
-MCP_SUPPORTED_RANGE = ">=2.0,<3"
+MCP_MINIMUM_VERSION = "2.2.0"
+MCP_SUPPORTED_RANGE = ">=2.2,<3"
 _MCP_REQUIREMENT = f"mcp{MCP_SUPPORTED_RANGE}"
 _RELEASE_PREFIX = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)(?:\.(?P<patch>\d+))?")
 _MCP_DEPENDENCY = re.compile(r"^mcp(?=[<>=!~;\[]|$)", re.IGNORECASE)

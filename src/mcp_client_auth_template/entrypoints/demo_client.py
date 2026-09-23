@@ -33,6 +33,7 @@ from mcp_client_auth_template.adapters.browser_redirect import open_system_brows
 from mcp_client_auth_template.adapters.client_credentials_auth import (
     OAUTH_CLIENT_CREDENTIALS_EXTENSION_ID,
     build_client_credentials_oauth_provider,
+    build_private_key_jwt_oauth_provider,
 )
 from mcp_client_auth_template.adapters.entra_client_auth import build_entra_oauth_provider
 from mcp_client_auth_template.adapters.generic_oidc_client_auth import build_generic_oauth_provider
@@ -41,9 +42,11 @@ from mcp_client_auth_template.adapters.oauth_discovery_security import (
     OAuthDiscoverySecurityPolicy,
     PinnedDnsAsyncTransport,
 )
+from mcp_client_auth_template.adapters.private_key_source import load_signing_key
 from mcp_client_auth_template.adapters.token_storage import FileTokenStorage, InMemoryTokenStorage
 from mcp_client_auth_template.entrypoints.cli_failures import (
     ClientExitCode,
+    RequiredToolUnavailableError,
     ToolCallFailedError,
     classify_failure,
     emit_failure,
@@ -95,6 +98,22 @@ def build_secure_http_transport(
     return TracingAsyncTransport.wrap(secure_transport, observability)
 
 
+def build_http_client(
+    settings: Settings,
+    *,
+    oauth_provider: OAuthClientProvider,
+    transport: httpx2.AsyncBaseTransport,
+) -> httpx2.AsyncClient:
+    """Build the one HTTP client shared by OAuth and MCP traffic, with its budgets."""
+    return httpx2.AsyncClient(
+        auth=oauth_provider,
+        follow_redirects=True,
+        max_redirects=settings.oauth_max_redirects,
+        timeout=build_http_timeout(settings),
+        transport=transport,
+    )
+
+
 def build_observability_settings() -> ObservabilitySettings:
     """Build this demo's observability identity; export/logging config comes from the environment.
 
@@ -123,6 +142,19 @@ async def build_oauth_provider(
     """
     if settings.auth_mode == "client_credentials":
         client_id = cast(str, settings.client_credentials_client_id)
+        issuer = cast(str, settings.client_credentials_issuer)
+        if settings.client_auth_method == "private_key_jwt":
+            key_path = settings.client_credentials_private_key_path
+            if key_path is None:  # pragma: no cover - Settings validates this invariant
+                raise RuntimeError("private_key_jwt settings were not validated")
+            return build_private_key_jwt_oauth_provider(
+                server_url=settings.server_url,
+                storage=storage,
+                client_id=client_id,
+                signing_key=load_signing_key(key_path),
+                issuer=issuer,
+                scope=settings.scope,
+            )
         secret = settings.client_credentials_secret
         if secret is None:  # pragma: no cover - Settings validates this invariant
             raise RuntimeError("client credentials settings were not validated")
@@ -131,6 +163,7 @@ async def build_oauth_provider(
             storage=storage,
             client_id=client_id,
             client_secret=secret.get_secret_value(),
+            issuer=issuer,
             scope=settings.scope,
         )
 
@@ -168,6 +201,22 @@ def build_http_timeout(settings: Settings) -> httpx2.Timeout:
         write=settings.http_write_timeout_seconds,
         pool=settings.http_pool_timeout_seconds,
     )
+
+
+async def discover_visible_tools(
+    client: Client, *, required: frozenset[str] = frozenset()
+) -> frozenset[str]:
+    """Return the tool names this principal may see, from the SDK's real ``tools/list``.
+
+    The server filters the catalog per principal (and marks it ``cacheScope=private``), so the
+    set reflects the current authorization context. Fails closed when a required tool is absent.
+    """
+    listing = await client.list_tools()
+    visible = frozenset(tool.name for tool in listing.tools)
+    missing = sorted(required - visible)
+    if missing:
+        raise RequiredToolUnavailableError(missing[0])
+    return visible
 
 
 async def call_tool_with_budget(
@@ -252,18 +301,15 @@ async def run_demo() -> None:
             settings, policy=network_policy, observability=observability
         )
         http_client = await exit_stack.enter_async_context(
-            httpx2.AsyncClient(
-                auth=oauth_provider,
-                follow_redirects=True,
-                max_redirects=settings.oauth_max_redirects,
-                timeout=build_http_timeout(settings),
-                transport=transport,
-            )
+            build_http_client(settings, oauth_provider=oauth_provider, transport=transport)
         )
         client = await exit_stack.enter_async_context(
             build_mcp_client(settings, http_client=http_client)
         )
         logger.info("mcp_connected", protocol_version=client.protocol_version)
+
+        visible_tools = await discover_visible_tools(client, required=frozenset({"whoami"}))
+        logger.info("mcp_tools_discovered", tool_names=sorted(visible_tools))
 
         await call_tool_with_budget(
             client, "whoami", timeout_seconds=settings.tool_call_timeout_seconds

@@ -9,8 +9,9 @@
 *[Leia em português](README.pt-BR.md)*
 
 > A production-oriented authentication reference for remote MCP clients: OAuth 2.1/OIDC,
-> Authorization Code + PKCE, Client Credentials, CIMD-first discovery, bounded scope step-up,
-> exact resource binding, stateless MCP `2026-07-28`, and end-to-end OpenTelemetry evidence.
+> Authorization Code + PKCE, issuer-bound Client Credentials (`client_secret_basic` or
+> `private_key_jwt`), CIMD-first discovery, bounded scope step-up, exact resource binding,
+> stateless MCP `2026-07-28`, and end-to-end OpenTelemetry evidence.
 
 Use this repository when the hard part is not "how do I call an MCP server?" but **how do I do it
 without weakening identity, token, transport, and observability boundaries**. It pairs with
@@ -25,10 +26,16 @@ The executable reference path validates real behavior rather than relying on con
 - ✅ RFC 9728 Protected Resource Metadata and RFC 8707 resource binding
 - ✅ RFC 9207 authorization-response issuer validation
 - ✅ bounded `403 insufficient_scope` step-up without widening grants silently
-- ✅ protected tools hidden from anonymous catalog discovery
+- ✅ unauthenticated `tools/list` refused with a `401` OAuth challenge; the authorized catalog is
+  filtered per scope and refreshed after step-up, proven over the real SDK wire path
 - ✅ wrong-audience JWT rejected with `401`
 - ✅ stateless MCP `2026-07-28` transport with no `Mcp-Session-Id` state
-- ✅ optional Client Credentials profile for unattended generic-OIDC workloads
+- ✅ optional Client Credentials profile for unattended generic-OIDC services, with
+  `client_secret_basic` or asymmetric `private_key_jwt`
+- ✅ pre-provisioned machine credentials bound to one configured authorization-server issuer: a
+  substituted authorization server receives no secret, assertion, or token
+- ✅ fail-closed regression suite for PRM `429`/`5xx`, issuer mismatch, cross-origin redirects and
+  `403` handling, run through both the SDK alone and the production transport
 - ✅ W3C trace-context propagation across MCP client and server
 - ✅ the same distributed trace positively verified in Collector and Tempo
 - ✅ telemetry checks that exclude OAuth/MCP sensitive values
@@ -37,7 +44,7 @@ The executable reference path validates real behavior rather than relying on con
 
 ```mermaid
 flowchart LR
-    User["Person / workload"] --> Client["MCP client"]
+    User["Person / service"] --> Client["MCP client"]
     Client -->|"OAuth 2.1 / OIDC<br/>Auth Code + PKCE or Client Credentials"| AS["Authorization server"]
     Client -->|"MCP 2026-07-28<br/>resource-bound bearer"| Server["MCP resource server"]
     Server -.->|"401 / 403 challenge"| Client
@@ -67,9 +74,9 @@ The fastest path to evaluate the project is the containerized reference scenario
 ./scripts/run_compose_demo.sh
 ```
 
-It runs the client against the published companion Server `v0.5.0` by immutable digest, performs
-CIMD-first Authorization Code + PKCE, proves scope step-up and negative audience handling, and
-finishes with a deterministic pass/fail banner.
+It runs the client against the published companion Server `v0.7.0` by immutable digest, performs
+CIMD-first Authorization Code + PKCE, proves the per-scope `tools/list` view, scope step-up and
+negative audience handling, and finishes with a deterministic pass/fail banner.
 
 For the full observable proof:
 
@@ -125,14 +132,35 @@ defaults.
 
 ## Authentication modes
 
-| Mode | Providers | Credential lifecycle | Typical fit |
-| --- | --- | --- | --- |
-| `interactive` | Entra ID or generic OIDC | Browser + PKCE; optional refreshable token file | Developer tools, desktop/native apps, operator CLIs |
-| `client_credentials` | Generic OIDC deterministic profile | Secret injected at startup; access tokens stay in memory | CI jobs, backend workers, scheduled automation |
+The client separates **human/interactive** authorization from **machine/service-to-service**
+authorization. They use different grants, credentials, and storage policies.
 
-Interactive generic OIDC uses CIMD first with DCR only as a compatibility fallback. Entra uses a
-pre-registered client. Machine mode does not open a browser, start the loopback callback, use
-CIMD/DCR, or persist its credential/access token.
+### Human / interactive: Authorization Code + PKCE (`MCP_CLIENT_AUTH_MODE=interactive`)
+
+| Profile | Registration | Typical fit |
+| --- | --- | --- |
+| Microsoft Entra ID | Pre-registered public client, tenant-pinned authorization server | Enterprise desktop/native apps, operator CLIs |
+| Generic OIDC, CIMD | Client ID Metadata Document URL as `client_id` (preferred) | Developer tools against standards-based IdPs |
+| Generic OIDC, DCR fallback | Dynamic Client Registration when CIMD is not advertised | Compatibility with older authorization servers |
+
+A browser and the loopback callback are used. Tokens can optionally persist in a hardened token file.
+
+### Machine / service-to-service: Client Credentials (`MCP_CLIENT_AUTH_MODE=client_credentials`)
+
+| `MCP_CLIENT_CLIENT_AUTH_METHOD` | Credential | Notes |
+| --- | --- | --- |
+| `client_secret_basic` (default) | Shared secret injected at startup | Backward-compatible bootstrap option |
+| `private_key_jwt` | Private key file on a secret mount; SDK-signed 60-second assertion | No shared secret at the authorization server |
+
+**Pre-provisioned machine credentials are issuer-bound.**
+`MCP_CLIENT_CLIENT_CREDENTIALS_ISSUER` is mandatory, and the MCP SDK sends the credential only to
+metadata discovered for exactly that issuer. If the MCP server advertises another authorization
+server, the client aborts before any secret or assertion leaves the process
+([ADR-0024](docs/adr/0024-issuer-bound-machine-credentials.md),
+[ADR-0025](docs/adr/0025-private-key-jwt-machine-authentication.md)). Machine mode does not open a
+browser, start the loopback callback, use CIMD/DCR, or persist its credential or access token. This
+profile is generic-OIDC only. `private_key_jwt` is asymmetric client authentication and is not
+Workload Identity Federation, which remains a separate roadmap item.
 
 ## Security properties
 
@@ -144,6 +172,11 @@ CIMD/DCR, or persist its credential/access token.
 - POSIX token files require private ownership and permissions, reject symlinks/hardlinks, cap read
   size, and use durable atomic replacement. In-memory storage is available.
 - Client secrets use `SecretStr`, remain in memory, and are excluded from structured failures.
+- Machine credentials are bound to a configured authorization-server issuer through the SDK's
+  `issuer=`; a substituted authorization server receives nothing sensitive.
+- `private_key_jwt` keys are read only from a file: no symlink in any path component, owner-only
+  permissions, and owner/root-owned, non-writable directories. The key never reaches logs, spans,
+  errors, or token storage.
 - Traces and logs exclude credentials, authorization codes, MCP payloads, bodies, arbitrary
   headers/URLs, baggage, personal data, and exception text.
 - GitHub Actions are SHA-pinned with read-only permissions by default; release writes are isolated

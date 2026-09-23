@@ -137,7 +137,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("Network:  shared namespace with real 127.0.0.1 loopback")
         print("Server:   immutable published image by digest")
         print("OAuth:    CIMD-first Authorization Code + PKCE")
-        print("Catalog:  protected tools hidden from anonymous tools/list")
+        print("Catalog:  401 without a token; tools/list filtered per scope, refreshed on step-up")
         print("Step-up:  mcp:tools:call -> + mcp:tools:health")
         print("Security: wrong audience rejected; no MCP session minted")
         print("============================================================")

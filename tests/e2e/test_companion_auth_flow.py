@@ -6,7 +6,7 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -14,7 +14,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx2
 import pytest
-from mcp.client.auth import OAuthFlowError
+from cryptography.hazmat.primitives import serialization
+from mcp.client.auth import OAuthClientProvider, OAuthFlowError
 from mcp.shared.auth import AuthorizationCodeResult, OAuthClientInformationFull
 from pydantic import AnyUrl
 
@@ -22,8 +23,14 @@ from mcp_client_auth_template.adapters.client_credentials_auth import (
     OAUTH_CLIENT_CREDENTIALS_EXTENSION_ID,
 )
 from mcp_client_auth_template.adapters.token_storage import InMemoryTokenStorage
-from mcp_client_auth_template.entrypoints.demo_client import build_mcp_client, build_oauth_provider
+from mcp_client_auth_template.entrypoints.demo_client import (
+    build_mcp_client,
+    build_oauth_provider,
+    discover_visible_tools,
+)
 from mcp_client_auth_template.entrypoints.settings import Settings
+from tests.integration.client_stack import production_client
+from tests.key_material import pem, rsa_key, secure_key_dir, write_key
 
 pytestmark = pytest.mark.e2e
 
@@ -45,6 +52,7 @@ _PROTOCOL_VERSION = "2026-07-28"
 _CIMD_CLIENT_ID = "https://client.example.invalid/oauth/client-metadata.json"
 _MACHINE_CLIENT_ID = "mcp-e2e-machine"
 _MACHINE_CLIENT_CREDENTIAL = "e2e-test-credential"
+_ASSERTION_CLIENT_ID = "mcp-e2e-machine-pkjwt"
 _HEADER_MISMATCH = -32020
 _UNSUPPORTED_PROTOCOL_VERSION = -32022
 
@@ -139,16 +147,34 @@ def _wait_for_port(port: int, process: _RunningProcess, *, timeout_seconds: floa
     pytest.fail(f"timed out waiting for localhost:{port}")
 
 
-@pytest.fixture
-async def topology() -> AsyncIterator[_Topology]:
-    """Start the fake OIDC AS and real companion MCP server on ephemeral localhost ports."""
-    as_port = _free_port()
-    server_port = _free_port()
-    issuer = f"http://127.0.0.1:{as_port}"
-    server_url = f"http://127.0.0.1:{server_port}"
+@dataclass(frozen=True)
+class _MachineKey:
+    private_key_path: Path
+    public_key_path: Path
 
+
+@pytest.fixture(scope="module")
+def machine_key() -> Iterator[_MachineKey]:
+    """One RSA client key pair registered at every fake AS for ``private_key_jwt``."""
+    key = rsa_key()
+    with secure_key_dir() as key_dir:
+        public_key_path = key_dir / "client-public.pem"
+        public_key_path.write_bytes(
+            key.public_key().public_bytes(
+                serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+        )
+        yield _MachineKey(
+            private_key_path=write_key(key_dir / "client.pem", pem(key)),
+            public_key_path=public_key_path,
+        )
+
+
+def _start_fake_as(as_port: int, public_key_path: Path) -> _RunningProcess:
+    """Start one fake OIDC AS process whose issuer is its own localhost URL."""
     fake_env = os.environ.copy()
-    fake_env["FAKE_OIDC_ISSUER"] = issuer
+    fake_env["FAKE_OIDC_ISSUER"] = f"http://127.0.0.1:{as_port}"
+    fake_env["FAKE_OIDC_CLIENT_ASSERTION_PUBLIC_KEY"] = str(public_key_path)
     fake_as = _start_process(
         [
             sys.executable,
@@ -169,48 +195,110 @@ async def topology() -> AsyncIterator[_Topology]:
     )
     try:
         _wait_for_port(as_port, fake_as)
+    except BaseException:
+        fake_as.stop()
+        raise
+    return fake_as
 
-        server_env = os.environ.copy()
-        existing_pythonpath = server_env.get("PYTHONPATH")
-        server_src = str(_SERVER_ROOT / "src")
-        server_env["PYTHONPATH"] = (
-            f"{server_src}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else server_src
-        )
-        server_env.update(
-            {
-                "MCP_SERVER_RESOURCE_SERVER_URL": f"{server_url}/",
-                "MCP_SERVER_REQUIRED_SCOPES": json.dumps([_REQUIRED_SCOPE]),
-                "MCP_SERVER_AUTH_PROVIDER": "generic",
-                "MCP_SERVER_GENERIC_ISSUER_URL": issuer,
-                "MCP_SERVER_GENERIC_AUDIENCE": f"{server_url}/",
-                "MCP_SERVER_OIDC_ALLOW_INSECURE_LOOPBACK": "true",
-                "LOG_LEVEL": "WARNING",
-            }
-        )
-        server = _start_process(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "mcp_server_auth_template.entrypoints.mcp_server:create_app",
-                "--factory",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(server_port),
-                "--log-level",
-                "warning",
-            ],
-            cwd=_SERVER_ROOT,
-            env=server_env,
-        )
+
+def _start_companion_server(server_port: int, issuer: str) -> _RunningProcess:
+    """Start the real companion MCP server trusting ``issuer`` as its authorization server."""
+    server_url = f"http://127.0.0.1:{server_port}"
+    server_env = os.environ.copy()
+    existing_pythonpath = server_env.get("PYTHONPATH")
+    server_src = str(_SERVER_ROOT / "src")
+    server_env["PYTHONPATH"] = (
+        f"{server_src}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else server_src
+    )
+    server_env.update(
+        {
+            "MCP_SERVER_RESOURCE_SERVER_URL": f"{server_url}/",
+            "MCP_SERVER_REQUIRED_SCOPES": json.dumps([_REQUIRED_SCOPE]),
+            "MCP_SERVER_AUTH_PROVIDER": "generic",
+            "MCP_SERVER_GENERIC_ISSUER_URL": issuer,
+            "MCP_SERVER_GENERIC_AUDIENCE": f"{server_url}/",
+            "MCP_SERVER_OIDC_ALLOW_INSECURE_LOOPBACK": "true",
+            "LOG_LEVEL": "WARNING",
+        }
+    )
+    server = _start_process(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "mcp_server_auth_template.entrypoints.mcp_server:create_app",
+            "--factory",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(server_port),
+            "--log-level",
+            "warning",
+        ],
+        cwd=_SERVER_ROOT,
+        env=server_env,
+    )
+    try:
+        _wait_for_port(server_port, server)
+    except BaseException:
+        server.stop()
+        raise
+    return server
+
+
+@pytest.fixture
+async def topology(machine_key: _MachineKey) -> AsyncIterator[_Topology]:
+    """Start the fake OIDC AS and real companion MCP server on ephemeral localhost ports."""
+    as_port = _free_port()
+    server_port = _free_port()
+    issuer = f"http://127.0.0.1:{as_port}"
+    fake_as = _start_fake_as(as_port, machine_key.public_key_path)
+    try:
+        server = _start_companion_server(server_port, issuer)
         try:
-            _wait_for_port(server_port, server)
-            yield _Topology(issuer=issuer, server_url=server_url, fake_as=fake_as, server=server)
+            yield _Topology(
+                issuer=issuer,
+                server_url=f"http://127.0.0.1:{server_port}",
+                fake_as=fake_as,
+                server=server,
+            )
         finally:
             server.stop()
     finally:
         fake_as.stop()
+
+
+@dataclass(frozen=True)
+class _SubstitutedTopology:
+    trusted_issuer: str
+    rogue_issuer: str
+    server_url: str
+
+
+@pytest.fixture
+async def substituted_topology(
+    machine_key: _MachineKey,
+) -> AsyncIterator[_SubstitutedTopology]:
+    """Trusted AS ``A`` for the client; the companion server trusts and advertises AS ``B``."""
+    trusted_port, rogue_port, server_port = _free_port(), _free_port(), _free_port()
+    rogue_issuer = f"http://127.0.0.1:{rogue_port}"
+    trusted = _start_fake_as(trusted_port, machine_key.public_key_path)
+    try:
+        rogue = _start_fake_as(rogue_port, machine_key.public_key_path)
+        try:
+            server = _start_companion_server(server_port, rogue_issuer)
+            try:
+                yield _SubstitutedTopology(
+                    trusted_issuer=f"http://127.0.0.1:{trusted_port}",
+                    rogue_issuer=rogue_issuer,
+                    server_url=f"http://127.0.0.1:{server_port}",
+                )
+            finally:
+                server.stop()
+        finally:
+            rogue.stop()
+    finally:
+        trusted.stop()
 
 
 async def _json_request(
@@ -368,6 +456,7 @@ async def test_full_oauth_flow_reaches_whoami_over_mcp_2026(topology: _Topology)
         "authorization_scopes": [_REQUIRED_SCOPE],
         "client_credentials_exchanges": 0,
         "client_credentials_scopes": [],
+        "accepted_client_assertions": [],
     }
 
 
@@ -421,6 +510,7 @@ async def test_cimd_first_flow_skips_dynamic_client_registration(
         "authorization_scopes": [_REQUIRED_SCOPE],
         "client_credentials_exchanges": 0,
         "client_credentials_scopes": [],
+        "accepted_client_assertions": [],
     }
 
 
@@ -470,6 +560,7 @@ async def test_runtime_scope_step_up_preserves_prior_grant_and_completes_health(
         "authorization_scopes": [_REQUIRED_SCOPE, expected_union],
         "client_credentials_exchanges": 0,
         "client_credentials_scopes": [],
+        "accepted_client_assertions": [],
     }
 
 
@@ -484,6 +575,7 @@ async def test_client_credentials_flow_is_non_interactive_and_steps_up_scopes(
         token_storage_path=None,
         oauth_allow_insecure_loopback=True,
         client_credentials_client_id=_MACHINE_CLIENT_ID,
+        client_credentials_issuer=topology.issuer,
         client_credentials_secret=_MACHINE_CLIENT_CREDENTIAL,
     )
     storage = InMemoryTokenStorage()
@@ -524,6 +616,7 @@ async def test_client_credentials_flow_is_non_interactive_and_steps_up_scopes(
         "authorization_scopes": [],
         "client_credentials_exchanges": 2,
         "client_credentials_scopes": [_REQUIRED_SCOPE, expected_union],
+        "accepted_client_assertions": [],
     }
 
 
@@ -539,6 +632,7 @@ async def test_client_credentials_rejects_an_invalid_secret_without_leaking_it(
         token_storage_path=None,
         oauth_allow_insecure_loopback=True,
         client_credentials_client_id=_MACHINE_CLIENT_ID,
+        client_credentials_issuer=topology.issuer,
         client_credentials_secret=invalid_credential,
     )
     provider = await build_oauth_provider(settings, storage=InMemoryTokenStorage())
@@ -559,7 +653,159 @@ async def test_client_credentials_rejects_an_invalid_secret_without_leaking_it(
         "authorization_scopes": [],
         "client_credentials_exchanges": 0,
         "client_credentials_scopes": [],
+        "accepted_client_assertions": [],
     }
+
+
+def _private_key_jwt_settings(server_url: str, issuer: str, key_path: Path) -> Settings:
+    return Settings(
+        auth_provider="generic",
+        auth_mode="client_credentials",
+        client_auth_method="private_key_jwt",
+        server_url=server_url,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+        client_credentials_client_id=_ASSERTION_CLIENT_ID,
+        client_credentials_private_key_path=key_path,
+        client_credentials_issuer=issuer,
+    )
+
+
+async def test_private_key_jwt_flow_is_non_interactive_and_steps_up_scopes(
+    topology: _Topology, machine_key: _MachineKey
+) -> None:
+    """Authenticate with an SDK-signed, issuer-audience client assertion and no shared secret."""
+    settings = _private_key_jwt_settings(
+        topology.server_url, topology.issuer, machine_key.private_key_path
+    )
+    storage = InMemoryTokenStorage()
+    provider = await build_oauth_provider(settings, storage=storage)
+
+    async with (
+        httpx2.AsyncClient(auth=provider, follow_redirects=True, timeout=30.0) as http_client,
+        build_mcp_client(settings, http_client=http_client) as client,
+    ):
+        assert client.protocol_version == _PROTOCOL_VERSION
+        initial_identity = await client.call_tool("whoami")
+        health = await client.call_tool("health")
+        elevated_identity = await client.call_tool("whoami")
+
+    assert initial_identity.structured_content == {
+        "authenticated": True,
+        "client_id": _ASSERTION_CLIENT_ID,
+        "subject": _ASSERTION_CLIENT_ID,
+        "scopes": [_REQUIRED_SCOPE],
+    }
+    assert health.structured_content == {"status": "ok"}
+    assert elevated_identity.structured_content is not None
+    assert elevated_identity.structured_content["scopes"] == [_REQUIRED_SCOPE, _HEALTH_SCOPE]
+    assert await storage.get_client_info() is None
+
+    state = await _json_request("GET", f"{topology.issuer}/__test__/state")
+    assert state["registrations"] == 0
+    assert state["client_credentials_exchanges"] == 2
+    assert (
+        state["accepted_client_assertions"]
+        == [
+            {
+                "iss": _ASSERTION_CLIENT_ID,
+                "sub": _ASSERTION_CLIENT_ID,
+                "aud": topology.issuer,
+                "lifetime": 60,
+            }
+        ]
+        * 2
+    )
+    token_requests = [
+        request for request in await _journal(topology.issuer) if request["path"] == "/token"
+    ]
+    assert len(token_requests) == 2
+    key_pem = machine_key.private_key_path.read_text()
+    for request in token_requests:
+        assert "authorization" not in cast(dict[str, str], request["headers"])
+        assert "client_secret" not in cast(str, request["body"])
+        assert key_pem not in json.dumps(request)
+
+
+async def test_private_key_jwt_with_an_unregistered_key_fails_closed_without_leaking_it(
+    topology: _Topology,
+) -> None:
+    """An assertion signed by an unregistered key is refused; the key never reaches errors."""
+    with secure_key_dir() as key_dir:
+        stray = write_key(key_dir / "stray.pem", pem(rsa_key()))
+        settings = _private_key_jwt_settings(topology.server_url, topology.issuer, stray)
+        provider = await build_oauth_provider(settings, storage=InMemoryTokenStorage())
+
+        with pytest.RaisesGroup(
+            OAuthFlowError, allow_unwrapped=True, flatten_subgroups=True
+        ) as raised:
+            async with (
+                httpx2.AsyncClient(
+                    auth=provider, follow_redirects=True, timeout=30.0
+                ) as http_client,
+                build_mcp_client(settings, http_client=http_client),
+            ):
+                pytest.fail("an unregistered client key unexpectedly authenticated")
+        stray_pem = stray.read_text()
+
+    rendered = f"{raised.value!s} {raised.value!r}"
+    for line in stray_pem.splitlines():
+        if not line.startswith("-----"):
+            assert line not in rendered
+    state = await _json_request("GET", f"{topology.issuer}/__test__/state")
+    assert state["token_exchanges"] == 0
+    assert state["accepted_client_assertions"] == []
+
+
+async def _journal(issuer: str) -> list[dict[str, object]]:
+    """Every request the fake AS at ``issuer`` received, excluding test-control calls."""
+    body = await _json_request("GET", f"{issuer}/__test__/requests")
+    requests = body["requests"]
+    assert isinstance(requests, list)
+    return cast(list[dict[str, object]], requests)
+
+
+async def test_machine_credential_never_reaches_an_authorization_server_the_prm_substitutes(
+    substituted_topology: _SubstitutedTopology,
+) -> None:
+    """The companion server advertises AS B; the client is bound to A and must send B nothing."""
+    topology = substituted_topology
+    settings = Settings(
+        auth_provider="generic",
+        auth_mode="client_credentials",
+        server_url=topology.server_url,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+        client_credentials_client_id=_MACHINE_CLIENT_ID,
+        client_credentials_secret=_MACHINE_CLIENT_CREDENTIAL,
+        client_credentials_issuer=topology.trusted_issuer,
+    )
+    provider = await build_oauth_provider(settings, storage=InMemoryTokenStorage())
+
+    with pytest.RaisesGroup(
+        pytest.RaisesExc(OAuthFlowError, match="metadata issuer mismatch"),
+        allow_unwrapped=True,
+        flatten_subgroups=True,
+    ):
+        async with (
+            httpx2.AsyncClient(auth=provider, follow_redirects=True, timeout=30.0) as http_client,
+            build_mcp_client(settings, http_client=http_client),
+        ):
+            pytest.fail("the client connected through the substituted authorization server")
+
+    rogue_requests = await _journal(topology.rogue_issuer)
+    assert rogue_requests, "the substituted AS metadata should have been discovered"
+    for request in rogue_requests:
+        headers = cast(dict[str, str], request["headers"])
+        assert request["method"] == "GET"
+        assert request["path"] != "/token"
+        assert "authorization" not in headers
+        assert request["body"] == ""
+        assert _MACHINE_CLIENT_CREDENTIAL not in json.dumps(request)
+        assert _MACHINE_CLIENT_ID not in json.dumps(request)
+    rogue_state = await _json_request("GET", f"{topology.rogue_issuer}/__test__/state")
+    assert rogue_state["token_exchanges"] == 0
+    assert await _journal(topology.trusted_issuer) == []
 
 
 async def test_modern_request_envelope_integrity_and_sessionless_transport(
@@ -742,3 +988,168 @@ async def test_rfc9207_authorization_response_issuer_mismatch_is_rejected(
     state = await _json_request("GET", f"{topology.issuer}/__test__/state")
     assert state["authorizations"] == 1
     assert state["token_exchanges"] == 0
+
+
+# --- Real tools/list interoperability (SDK client + wire, no hand-built results) -------------
+
+_BASIC_VIEW = frozenset({"whoami"})
+_ELEVATED_VIEW = frozenset({"whoami", "health"})
+
+
+def _tools_list_request() -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/list",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": _PROTOCOL_VERSION,
+                "io.modelcontextprotocol/clientInfo": {"name": "wire-e2e", "version": "1.0.0"},
+                "io.modelcontextprotocol/clientCapabilities": {},
+            }
+        },
+    }
+
+
+async def _wire_tool_names(topology: _Topology, token: str) -> frozenset[str]:
+    """``tools/list`` as raw JSON-RPC over HTTP with the client's own access token."""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "MCP-Protocol-Version": _PROTOCOL_VERSION,
+        "Mcp-Method": "tools/list",
+    }
+    async with httpx2.AsyncClient(follow_redirects=False, timeout=5.0) as client:
+        response = await client.post(
+            f"{topology.server_url}/mcp", headers=headers, json=_tools_list_request()
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "result" in body, body
+    return frozenset(tool["name"] for tool in body["result"]["tools"])
+
+
+async def _current_token(storage: InMemoryTokenStorage) -> str:
+    tokens = await storage.get_tokens()
+    assert tokens is not None
+    return tokens.access_token
+
+
+async def _machine_settings(topology: _Topology, machine_key: _MachineKey, method: str) -> Settings:
+    if method == "private_key_jwt":
+        return _private_key_jwt_settings(
+            topology.server_url, topology.issuer, machine_key.private_key_path
+        )
+    return Settings(
+        auth_provider="generic",
+        auth_mode="client_credentials",
+        server_url=topology.server_url,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+        client_credentials_client_id=_MACHINE_CLIENT_ID,
+        client_credentials_secret=_MACHINE_CLIENT_CREDENTIAL,
+        client_credentials_issuer=topology.issuer,
+    )
+
+
+async def _profile(
+    profile: str, topology: _Topology, machine_key: _MachineKey
+) -> tuple[Settings, InMemoryTokenStorage, OAuthClientProvider]:
+    storage = InMemoryTokenStorage()
+    if profile in {"client_secret_basic", "private_key_jwt"}:
+        settings = await _machine_settings(topology, machine_key, profile)
+        return settings, storage, await build_oauth_provider(settings, storage=storage)
+    if profile == "cimd":
+        await _json_request(
+            "POST",
+            f"{topology.issuer}/__test__/configure",
+            {"client_id_metadata_document_supported": True},
+        )
+    settings = Settings(
+        auth_provider="generic",
+        server_url=topology.server_url,
+        token_storage_path=None,
+        oauth_allow_insecure_loopback=True,
+        generic_client_metadata_url=_CIMD_CLIENT_ID if profile == "cimd" else None,
+    )
+    browser = _AuthorizationRedirectHarness()
+    provider = await build_oauth_provider(
+        settings,
+        storage=storage,
+        redirect_handler=browser.redirect,
+        callback_handler=browser.callback,
+    )
+    return settings, storage, provider
+
+
+@pytest.mark.parametrize("profile", ["dcr", "cimd", "client_secret_basic", "private_key_jwt"])
+async def test_tools_list_interoperates_over_the_sdk_and_the_wire(
+    topology: _Topology, machine_key: _MachineKey, profile: str
+) -> None:
+    """OAuth, modern protocol, and an authorization-filtered catalog that follows step-up."""
+    settings, storage, provider = await _profile(profile, topology, machine_key)
+
+    async with production_client(settings, oauth_provider=provider) as client:
+        assert client.protocol_version == _PROTOCOL_VERSION
+
+        initial_view = await discover_visible_tools(client, required=frozenset({"whoami"}))
+        assert initial_view == _BASIC_VIEW
+        assert await _wire_tool_names(topology, await _current_token(storage)) == initial_view
+
+        whoami = await client.call_tool("whoami")
+        assert whoami.structured_content is not None
+        assert whoami.structured_content["authenticated"] is True
+
+        health = await client.call_tool("health")
+        assert health.structured_content == {"status": "ok"}
+
+        refreshed = await client.list_tools(cache_mode="refresh")
+        refreshed_view = frozenset(tool.name for tool in refreshed.tools)
+        assert refreshed_view == _ELEVATED_VIEW
+        assert await _wire_tool_names(topology, await _current_token(storage)) == refreshed_view
+
+        cached_view = await discover_visible_tools(client)
+        assert cached_view == _ELEVATED_VIEW
+
+
+async def test_sdk_private_cache_is_not_evicted_by_an_in_client_scope_step_up(
+    topology: _Topology, machine_key: _MachineKey
+) -> None:
+    """Characterize MCP SDK 2.2: a step-up inside one Client keeps the old private catalog.
+
+    The SDK partitions its response cache per ``Client`` ("construct a new Client when the
+    principal changes") and does not evict when the OAuth provider swaps tokens. Within the
+    30-second ``ttlMs`` a plain ``list_tools()`` right after a step-up therefore serves the
+    pre-step-up view. The server keeps authorizing on the wire, so the stale view can hide a
+    newly granted tool but never grants one. The client refreshes explicitly after an
+    authorization-context change (see the interoperability test above).
+    """
+    settings, storage, provider = await _profile("client_secret_basic", topology, machine_key)
+
+    async with production_client(settings, oauth_provider=provider) as client:
+        assert await discover_visible_tools(client) == _BASIC_VIEW
+        await client.call_tool("health")
+
+        assert await _wire_tool_names(topology, await _current_token(storage)) == _ELEVATED_VIEW
+        assert await discover_visible_tools(client) == _BASIC_VIEW
+
+
+async def test_anonymous_tools_list_is_refused_by_the_companion_server(
+    topology: _Topology,
+) -> None:
+    """Discovery without a bearer token gets the server's real contract: an OAuth challenge."""
+    async with httpx2.AsyncClient(follow_redirects=False, timeout=5.0) as client:
+        response = await client.post(
+            f"{topology.server_url}/mcp",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "MCP-Protocol-Version": _PROTOCOL_VERSION,
+                "Mcp-Method": "tools/list",
+            },
+            json=_tools_list_request(),
+        )
+
+    assert response.status_code == 401
+    assert "resource_metadata=" in response.headers["WWW-Authenticate"]

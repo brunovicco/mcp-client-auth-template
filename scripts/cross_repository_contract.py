@@ -32,6 +32,9 @@ _REQUIRED_POSITIVE_EVIDENCE = frozenset(
         "pre-dispatch-step-up-retry",
         "server-discover",
         "tools/call:whoami",
+        "mcp-sdk-2.2",
+        "oauth-private-key-jwt",
+        "tools/list:authorization-filtered",
     }
 )
 _REQUIRED_NEGATIVE_EVIDENCE = frozenset(
@@ -45,6 +48,10 @@ _REQUIRED_NEGATIVE_EVIDENCE = frozenset(
         "request-header-envelope-mismatch",
         "unsupported-protocol-version",
         "authorization-response-issuer-mismatch",
+        "authorization-server-issuer-binding",
+        "oauth-cross-origin-redirect-rejection",
+        "oauth-prm-fail-closed",
+        "token-audience-validation",
     }
 )
 
