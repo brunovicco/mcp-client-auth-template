@@ -67,9 +67,9 @@ from the evidence.
 The gate evaluates the same saved report against `security/vulnerability-exceptions.json`. An
 exception must match the exact advisory namespace, package type, and installed version; identify an
 owner, review date, expiry, rationale, and removal plan; and span no more than 90 days. Expired,
-stale, duplicate, or version-drifted exceptions fail closed. The current CPython exceptions exist
-only because Grype lists fixes outside the supported stable runtime lines, expire on 2026-09-30,
-and remain present in the complete report. [ADR-0020](adr/0020-actionable-vulnerability-exceptions.md)
+stale, duplicate, or version-drifted exceptions fail closed. The current exception covers
+CVE-2026-82049 on CPython 3.13.15 only until the official 3.13.16 image is available, expires on
+2026-10-15, and remains present in the complete report. [ADR-0020](adr/0020-actionable-vulnerability-exceptions.md)
 records the decision and follow-up.
 
 Syft and Grype are downloaded only from exact immutable release URLs. Their versions and per-platform

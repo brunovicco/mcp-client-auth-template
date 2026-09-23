@@ -68,8 +68,8 @@ O gate avalia o mesmo relatório salvo contra `security/vulnerability-exceptions
 precisa corresponder exatamente ao namespace do advisory, tipo de pacote e versão instalada;
 identificar owner, data de revisão, expiração, justificativa e plano de remoção; e durar no máximo
 90 dias. Exceções expiradas, obsoletas, duplicadas ou incompatíveis com uma nova versão falham de
-forma fechada. As exceções atuais do CPython existem apenas porque o Grype lista correções fora das
-linhas estáveis suportadas, expiram em 2026-09-30 e continuam no relatório completo. A
+forma fechada. A exceção atual cobre a CVE-2026-82049 no CPython 3.13.15 apenas até a imagem oficial
+do 3.13.16 estar disponível, expira em 2026-10-15 e continua no relatório completo. A
 [ADR-0020](adr/0020-actionable-vulnerability-exceptions.md) registra a decisão e o follow-up.
 
 Syft e Grype são baixados apenas de URLs de releases imutáveis e exatas. Versões e checksums SHA-256
