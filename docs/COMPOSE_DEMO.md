@@ -22,12 +22,16 @@ Run:
 The server is consumed by immutable digest:
 
 ```text
-ghcr.io/brunovicco/mcp-server-auth-template@sha256:4a220992b5df2382b2f821713b8b4c840469e4465395cbdeb1349dee0f8a1110
+ghcr.io/brunovicco/mcp-server-auth-template@sha256:097684a7a0302a849d979ceda201d82d71026186b44f2fa598d994abcdaeb17b
 ```
 
 The demo reuses the exact P1.7a scenario and proves MCP `2026-07-28`, CIMD-first Authorization
-Code + PKCE, protected anonymous catalog behavior, authenticated `whoami`, bounded scope step-up
-through `health`, wrong-audience rejection, and no MCP session state.
+Code + PKCE, the `401` challenge for unauthenticated `tools/list`, the per-scope `tools/list` view
+refreshed after step-up, authenticated `whoami`, bounded scope step-up through `health`,
+wrong-audience rejection, and no MCP session state.
+
+The pinned digest is the companion server's published `v0.7.0` image, which includes the
+`tools/list` wire-result fix that the per-scope catalog assertion needs.
 
 The JSON summary marks the execution topology as `docker-compose-shared-loopback`.
 

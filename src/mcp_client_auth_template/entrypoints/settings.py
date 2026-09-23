@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     # --- OAuth Client Credentials extension (generic OIDC only) ---
     client_credentials_client_id: str | None = None
     client_credentials_secret: SecretStr | None = None
+    # Issuer identifier of the authorization server that provisioned the credential. The SDK
+    # sends the credential only to metadata discovered for exactly this issuer (ADR-0024).
+    client_credentials_issuer: str | None = None
+    # How the machine client authenticates at the token endpoint. ``private_key_jwt`` signs a
+    # short-lived client assertion with a key read from a secret-mount file (ADR-0025).
+    client_auth_method: Literal["client_secret_basic", "private_key_jwt"] = "client_secret_basic"
+    client_credentials_private_key_path: Path | None = None
 
     @property
     def redirect_uri(self) -> str:
@@ -78,19 +85,42 @@ class Settings(BaseSettings):
             or parsed.fragment
         ):
             raise ValueError("server_url must not contain credentials, query, or fragment")
-        if parsed.scheme == "http" and not self.oauth_allow_insecure_loopback:
+        if parsed.scheme == "http":
+            self._require_loopback_http(parsed.hostname, "server_url")
+
+    def _require_loopback_http(self, host: str, field_name: str) -> None:
+        if not self.oauth_allow_insecure_loopback:
             raise ValueError(
-                "HTTP server_url requires oauth_allow_insecure_loopback=true for local development"
+                f"HTTP {field_name} requires oauth_allow_insecure_loopback=true "
+                "for local development"
+            )
+        if host != "localhost":
+            try:
+                address = ip_address(host)
+            except ValueError as exc:
+                raise ValueError(f"HTTP {field_name} is allowed only for loopback hosts") from exc
+            if not address.is_loopback:
+                raise ValueError(f"HTTP {field_name} is allowed only for loopback hosts")
+
+    def _validate_client_credentials_issuer(self, issuer: str) -> None:
+        """Structural, fail-closed checks only; issuer matching itself belongs to the SDK."""
+        self._validate_credential_identifier(issuer, "client_credentials_issuer")
+        parsed = urlsplit(issuer)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("client_credentials_issuer must be an absolute http(s) URL")
+        if (
+            parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or "?" in issuer
+            or "#" in issuer
+        ):
+            raise ValueError(
+                "client_credentials_issuer must not contain credentials, query, or fragment"
             )
         if parsed.scheme == "http":
-            host = parsed.hostname
-            if host != "localhost":
-                try:
-                    address = ip_address(host)
-                except ValueError as exc:
-                    raise ValueError("HTTP server_url is allowed only for loopback hosts") from exc
-                if not address.is_loopback:
-                    raise ValueError("HTTP server_url is allowed only for loopback hosts")
+            self._require_loopback_http(parsed.hostname, "client_credentials_issuer")
 
     def _validate_redirect_listener(self) -> None:
         try:
@@ -176,6 +206,21 @@ class Settings(BaseSettings):
         self._validate_scope()
         self._validate_generic_metadata_url()
 
+        if self.auth_mode == "interactive":
+            machine_only = {
+                "client_credentials_issuer": self.client_credentials_issuer,
+                "client_credentials_private_key_path": self.client_credentials_private_key_path,
+            }
+            for machine_field, configured in machine_only.items():
+                if configured is not None:
+                    raise ValueError(
+                        f"{machine_field} is used only with auth_mode=client_credentials"
+                    )
+            if self.client_auth_method != "client_secret_basic":
+                raise ValueError(
+                    "client_auth_method is used only with auth_mode=client_credentials"
+                )
+
         if self.auth_mode == "client_credentials":
             if self.auth_provider != "generic":
                 raise ValueError(
@@ -185,22 +230,38 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "generic_client_metadata_url is not used with auth_mode=client_credentials"
                 )
+            credential_field, unused_field = (
+                ("client_credentials_private_key_path", "client_credentials_secret")
+                if self.client_auth_method == "private_key_jwt"
+                else ("client_credentials_secret", "client_credentials_private_key_path")
+            )
             missing = [
                 name
                 for name, value in (
                     ("client_credentials_client_id", self.client_credentials_client_id),
-                    ("client_credentials_secret", self.client_credentials_secret),
+                    (credential_field, getattr(self, credential_field)),
+                    ("client_credentials_issuer", self.client_credentials_issuer),
                 )
                 if value is None or (isinstance(value, str) and not value)
             ]
             if missing:
                 raise ValueError(f"auth_mode=client_credentials requires: {', '.join(missing)}")
+            if getattr(self, unused_field) is not None:
+                raise ValueError(
+                    f"{unused_field} is not used with client_auth_method={self.client_auth_method}"
+                )
             self._validate_credential_identifier(
                 self.client_credentials_client_id or "", "client_credentials_client_id"
             )
             secret = self.client_credentials_secret
-            if secret is None or not secret.get_secret_value():
+            if self.client_auth_method == "client_secret_basic" and (
+                secret is None or not secret.get_secret_value()
+            ):
                 raise ValueError("client_credentials_secret must not be empty")
+            key_path = self.client_credentials_private_key_path
+            if key_path is not None and not key_path.is_absolute():
+                raise ValueError("client_credentials_private_key_path must be an absolute path")
+            self._validate_client_credentials_issuer(self.client_credentials_issuer or "")
             # Access tokens from this flow are short-lived and can be reacquired with the
             # configured credential. Do not persist either tokens or fixed client credentials.
             self.token_storage_path = None

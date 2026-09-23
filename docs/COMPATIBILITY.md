@@ -9,8 +9,8 @@ CI verifies both the support floor and the moving compatible edge.
 | Dimension | Supported policy | CI evidence |
 | --- | --- | --- |
 | Python | `>=3.13,<3.15` | Python 3.13 and 3.14 matrix cells |
-| MCP Python SDK | `>=2.0,<3` | `minimum` and `latest` profiles |
-| MCP SDK support floor | `2.0.0` | Exact `mcp==2.0.0` installation |
+| MCP Python SDK | `>=2.2,<3` | `minimum` and `latest` profiles |
+| MCP SDK support floor | `2.2.0` | Exact `mcp==2.2.0` installation |
 | MCP SDK upper boundary | `<3` | Latest resolver constrained to MCP 2.x |
 | MCP protocol reference profile | `2026-07-28` | Versioned pair contract + client-owned E2E |
 | Transport | Streamable HTTP | Production and loopback profiles |
@@ -25,8 +25,8 @@ All four Python × MCP-profile cells must pass the repository test suite.
 `uv.lock`. `compatibility.yml` intentionally mutates only the disposable CI virtual environment
 after the locked sync:
 
-- `minimum` installs exactly MCP SDK 2.0.0;
-- `latest` upgrades MCP to the newest version resolvable by `mcp>=2.0,<3`;
+- `minimum` installs exactly MCP SDK 2.2.0;
+- `latest` upgrades MCP to the newest version resolvable by `mcp>=2.2,<3`;
 - the lockfile is never rewritten by the compatibility workflow;
 - tests run through `.venv/bin/python`, so `uv run` cannot resynchronize MCP back to the lock.
 
@@ -39,7 +39,7 @@ Support floor:
 
 ```bash
 uv sync --frozen --all-groups --python 3.13
-uv pip install --python .venv/bin/python "mcp==2.0.0"
+uv pip install --python .venv/bin/python "mcp==2.2.0"
 uv pip check
 .venv/bin/python scripts/compatibility_contract.py --python 3.13 --mcp-profile minimum
 .venv/bin/python -m pytest --no-cov
@@ -49,7 +49,7 @@ Moving 2.x edge:
 
 ```bash
 uv sync --frozen --all-groups --python 3.14
-uv pip install --python .venv/bin/python --upgrade "mcp>=2.0,<3"
+uv pip install --python .venv/bin/python --upgrade "mcp>=2.2,<3"
 uv pip check
 .venv/bin/python scripts/compatibility_contract.py --python 3.14 --mcp-profile latest
 .venv/bin/python -m pytest --no-cov
@@ -127,18 +127,61 @@ scope, then the SDK repeats that undispatched request once. For Entra, both logi
 qualified with the configured Application ID URI and `health` requires a delegated identity.
 
 The pair also exercises the official optional `io.modelcontextprotocol/oauth-client-credentials` extension
-with the SDK support floor. The generic client uses a pre-registered ID and
-`client_secret_basic`; the server advertises the capability, and the flow completes discovery,
+with the SDK support floor. The generic client uses a pre-registered ID with
+`client_secret_basic` or `private_key_jwt`; the server advertises the capability, and the flow completes discovery,
 resource-bound token acquisition, `whoami`, and non-interactive scope step-up without browser,
 CIMD, DCR, refresh token, or persisted access token. This is a generic-OIDC interoperability
 profile, not an Entra app-only claim. Entra client credentials use `{resource}/.default` and app
 roles and require provider-specific live validation outside this deterministic matrix.
+
+Since MCP SDK 2.2 the machine profile is issuer-bound. The client passes the mandatory
+`MCP_CLIENT_CLIENT_CREDENTIALS_ISSUER` to the SDK's `issuer=`, and the pair E2E starts a second
+authorization server that the companion server advertises instead. That substituted server
+receives only unauthenticated metadata requests, never a secret, client assertion, or bearer
+token. The same profile also runs with `private_key_jwt`: an SDK-signed assertion whose `aud` is
+the authorization-server issuer, whose lifetime is 60 seconds, and which the fake authorization
+server verifies with the registered public key.
+
+`tools/list` interoperability is proven on the real wire. For the DCR, CIMD, `client_secret_basic`
+and `private_key_jwt` profiles, the SDK's `list_tools()` result equals the raw JSON-RPC
+`tools/list` result for the same token (`{whoami}` at the initial scope). After the `health`
+step-up, `list_tools(cache_mode="refresh")` and the following cached call both return
+`{whoami, health}`. Unauthenticated `tools/list` receives the server's `401` OAuth challenge.
+These assertions need the companion server's v0.7.0 `tools/list` wire-result fix (server `v0.7.0`
+or later).
+
+v0.7.0 pair evidence and the tests that prove each entry:
+
+| Contract entry | Kind | Evidence |
+| --- | --- | --- |
+| `mcp-sdk-2.2` | positive | `scripts/compatibility_contract.py` minimum profile `2.2.0`; `tests/unit/test_mcp_deprecation_gate.py` |
+| `oauth-private-key-jwt` | positive | E2E `test_private_key_jwt_flow_is_non_interactive_and_steps_up_scopes`; `tests/integration/test_private_key_jwt.py` |
+| `tools/list:authorization-filtered` | positive | E2E `test_tools_list_interoperates_over_the_sdk_and_the_wire` (four profiles) |
+| `authorization-server-issuer-binding` | negative | E2E `test_machine_credential_never_reaches_an_authorization_server_the_prm_substitutes`; `tests/integration/test_issuer_binding.py` |
+| `oauth-cross-origin-redirect-rejection` | negative | `tests/integration/test_oauth_fail_closed.py::test_cross_origin_*`, `test_token_endpoint_redirect_*`, `test_mcp_endpoint_redirect_*` |
+| `oauth-prm-fail-closed` | negative | `tests/integration/test_oauth_fail_closed.py::test_prm_*` |
+| `token-audience-validation` | negative | E2E `test_invalid_tokens_fail_closed` (wrong audience, `401`) against the server's explicit audience policy |
 
 Local pair verification:
 
 ```bash
 python scripts/cross_repository_contract.py --peer-root ../mcp-server-auth-template
 ```
+
+### MCP SDK 2.2 behavior relied on
+
+| Behavior | Owner | Client evidence |
+| --- | --- | --- |
+| `issuer=` binding for pre-provisioned machine credentials | SDK | `tests/integration/test_issuer_binding.py`, `test_private_key_jwt.py`, companion E2E |
+| RFC 8414 metadata issuer must equal the discovered issuer (SEP-2468) | SDK | `test_oauth_fail_closed.py::test_as_metadata_issuer_mismatch_*` |
+| PRM `429`/`5xx` fails closed without the legacy path | SDK | `test_oauth_fail_closed.py::test_prm_*` |
+| OAuth and MCP redirects followed only within origin | SDK and the client's DNS-pinned transport | `test_oauth_fail_closed.py::test_cross_origin_*`, `test_token_endpoint_redirect_*`, `test_mcp_endpoint_redirect_*` |
+| `403` re-authorizes only for `insufficient_scope` | SDK | `test_oauth_fail_closed.py::test_403_*` |
+| Private response cache is per `Client` and not evicted on token change | SDK (characterized) | `test_sdk_private_cache_is_not_evicted_by_an_in_client_scope_step_up` |
+| `MCPDeprecationWarning` fails the suite | Client test policy | `tests/unit/test_mcp_deprecation_gate.py` |
+
+Omitting `issuer=` on the machine providers is deprecated in 2.2 and becomes an error in MCP 3. The
+client already passes it, and the deprecation gate keeps it that way.
 
 ## Scope
 

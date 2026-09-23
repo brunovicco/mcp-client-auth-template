@@ -8,7 +8,10 @@ dependencies = [
     "pydantic>=2.11",
     "pydantic-settings>=2.8",
     "structlog>=25.1",
-    "mcp>=2.0,<3",
+    "mcp>=2.2,<3",
+    # Parses and type-checks the private_key_jwt signing key (ADR-0025); already required
+    # transitively through the SDK's pyjwt[crypto], declared because the client imports it.
+    "cryptography>=45",
     "anyio>=4.8",
     # Observability: see docs/OBSERVABILITY.md and docs/adr/0019-native-mcp-v2-observability.md.
     # Network-silent by default (ObservabilitySettings.enabled=False); a core dependency because
@@ -104,8 +107,11 @@ disallow_untyped_decorators = false
 addopts = "--strict-config --strict-markers --cov=src/mcp_client_auth_template --cov-report=term-missing"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# MCP SDK deprecations mark APIs that change or disappear in MCP 3; fail on them now.
+# Scoped to the SDK's own warning class so unrelated third-party deprecations are not promoted.
+filterwarnings = ["error::mcp.MCPDeprecationWarning"]
 markers = [
-    "integration: tests that require real infrastructure",
+    "integration: real-wire tests against local loopback servers",
     "contract: tests that verify an interface contract",
     "e2e: critical end-to-end tests",
 ]

@@ -36,7 +36,7 @@ docker info >/dev/null 2>&1 || {
 
 export MCP_DEMO_UID="$(id -u)"
 export MCP_DEMO_GID="$(id -g)"
-export MCP_DEMO_SERVER_IMAGE="ghcr.io/brunovicco/mcp-server-auth-template@sha256:4a220992b5df2382b2f821713b8b4c840469e4465395cbdeb1349dee0f8a1110"
+export MCP_DEMO_SERVER_IMAGE="ghcr.io/brunovicco/mcp-server-auth-template@sha256:097684a7a0302a849d979ceda201d82d71026186b44f2fa598d994abcdaeb17b"
 
 compose() {
   docker compose     --project-name "$PROJECT_NAME"     --file "$BASE_FILE"     --file "$OBS_FILE"     "$@"

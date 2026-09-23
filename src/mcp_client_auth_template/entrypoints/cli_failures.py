@@ -11,6 +11,7 @@ from mcp.client.auth.exceptions import OAuthFlowError
 from mcp.shared.exceptions import MCPError
 
 from mcp_client_auth_template.adapters.oauth_discovery_security import OAuthNetworkSecurityError
+from mcp_client_auth_template.adapters.private_key_source import PrivateKeySourceError
 from mcp_client_auth_template.adapters.token_storage import (
     TokenStorageCorruptionError,
     TokenStorageSecurityError,
@@ -57,6 +58,15 @@ class ClientFailure:
     exception_type: str
 
 
+class RequiredToolUnavailableError(RuntimeError):
+    """Raised when the authorized ``tools/list`` view lacks a tool the client needs."""
+
+    def __init__(self, tool_name: str) -> None:
+        """Remember only the safe tool name."""
+        self.tool_name = tool_name
+        super().__init__("required MCP tool is not visible to this principal")
+
+
 class ToolCallFailedError(RuntimeError):
     """Raised when an MCP tool returns ``is_error=True``."""
 
@@ -97,7 +107,7 @@ def classify_failure(error: Exception) -> ClientFailure:
     """Map expected operational exceptions to a stable, secret-free process contract."""
     errors = tuple(_exception_tree(error))
 
-    matched = _first_matching(errors, (ConfigurationPreflightError,))
+    matched = _first_matching(errors, (ConfigurationPreflightError, PrivateKeySourceError))
     if matched is not None:
         return _failure(matched, ClientFailureCategory.CONFIGURATION, ClientExitCode.CONFIGURATION)
 
@@ -128,7 +138,7 @@ def classify_failure(error: Exception) -> ClientFailure:
     if matched is not None:
         return _failure(matched, ClientFailureCategory.NETWORK, ClientExitCode.NETWORK)
 
-    matched = _first_matching(errors, (ToolCallFailedError,))
+    matched = _first_matching(errors, (ToolCallFailedError, RequiredToolUnavailableError))
     if matched is not None:
         return _failure(matched, ClientFailureCategory.TOOL, ClientExitCode.TOOL)
 

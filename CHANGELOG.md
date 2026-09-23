@@ -7,6 +7,57 @@ pre-1.0 and remains a reference template under active development.
 
 ## [Unreleased]
 
+Client-side work toward the v0.7.0 client/server pair. The version bump, release notes and
+pair-level compatibility-contract entries land with the pair release.
+
+### Added
+
+- `MCP_CLIENT_CLIENT_CREDENTIALS_ISSUER`, mandatory in `client_credentials` mode. The value
+  gets minimal structural validation (non-empty, trimmed, no control characters, absolute URL
+  with a host, no userinfo/query/fragment, HTTPS unless it is development loopback) and is
+  passed unchanged to the SDK's `issuer=`, which aborts before a credential reaches any other
+  authorization server (ADR-0024).
+- `MCP_CLIENT_CLIENT_AUTH_METHOD=client_secret_basic|private_key_jwt`, defaulting to
+  `client_secret_basic`. `private_key_jwt` uses the SDK's `PrivateKeyJWTOAuthProvider` with
+  SDK-signed, issuer-audience, 60-second assertions and a key read from
+  `MCP_CLIENT_CLIENT_CREDENTIALS_PRIVATE_KEY_PATH` under an SSH StrictModes-style file policy
+  (ADR-0025).
+- `tests/integration`: real-wire tests against the SDK's own `MCPServer` and journaling local
+  authorization servers. They cover issuer binding, `private_key_jwt`, and a fail-closed
+  regression suite (PRM `429`/`5xx`, issuer mismatch, cross-origin redirects, `403` handling,
+  credential boundaries), each run through the SDK alone and through the production transport.
+- Companion E2E coverage: a substituted authorization server receives no credential,
+  `private_key_jwt` with step-up, and real `tools/list` interoperability (SDK result equals the
+  raw JSON-RPC wire result) for the DCR, CIMD, `client_secret_basic` and `private_key_jwt`
+  profiles.
+- `discover_visible_tools()`: the demo now reads the principal's catalog through the SDK's real
+  `tools/list` and fails closed when `whoami` is not visible.
+
+### Changed
+
+- MCP Python SDK floor raised to `mcp>=2.2,<3` (locks `mcp`/`mcp-types` 2.2.0). The
+  compatibility contract and matrix now test 2.2.0 as the minimum.
+- `mcp.MCPDeprecationWarning` fails the test suite; other deprecation classes are not
+  promoted.
+- The headless reference demo asserts the real catalog contract: unauthenticated `tools/list`
+  gets `401` with a `resource_metadata` challenge, the authorized view is `{whoami}`, and it
+  is refreshed to `{whoami, health}` after step-up. The former "anonymous catalog is empty"
+  check went through the OAuth client and passed only because of the companion server's
+  since-fixed empty-catalog bug. The P1.7b/P1.7c demos pin a published server image and
+  need the v0.7.0 server image from the pair release.
+- `cryptography` is declared explicitly (already locked through the SDK's `pyjwt[crypto]`).
+
+### Fixed
+
+- The Entra tenant pin stored its issuer as `_expected_issuer`, which shadowed the
+  `_expected_issuer()` method that SDK 2.2 added to `OAuthClientProvider`. Every Entra `401`
+  challenge would have failed with `TypeError`. The pin also keeps validating the redirects
+  that the SDK 2.2 auth flow now follows within origin.
+
+### Security
+
+- `httpx2` and `httpcore2` upgraded from 2.9.1 to 2.13.0 (PYSEC-2026-3844..3849).
+
 ## [0.6.0] - 2026-08-10
 
 ### Added

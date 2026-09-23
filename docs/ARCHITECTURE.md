@@ -18,8 +18,20 @@ repository's.
   that server, and its `whoami`/`health` tools are what the demo entrypoint calls.
 - **Local dependency**: interactive mode uses a loopback socket
   (`adapters/loopback_callback_server.py`) and may use a local JSON token file. Client-credentials
-  mode uses neither: its fixed credential is injected at process start and access tokens remain in
-  memory.
+  mode uses neither. Its credential is either a secret injected at process start or, for
+  `private_key_jwt`, a key file read once through `adapters/private_key_source.py`, and access
+  tokens remain in memory.
+
+## Authorization profiles
+
+| Kind | Grant | Profiles | Credential boundary |
+| --- | --- | --- | --- |
+| Human / interactive | Authorization Code + PKCE | Entra pre-registered public client; generic OIDC CIMD; generic OIDC DCR fallback | Entra: tenant-pinned authorization server (ADR-0004). Generic: SDK issuer binding for stored registrations (SEP-2352) |
+| Machine / service-to-service | Client Credentials | `client_secret_basic`; `private_key_jwt` | Mandatory configured issuer passed to the SDK's `issuer=` (ADR-0024, ADR-0025) |
+
+Pre-provisioned machine credentials are issuer-bound: the configured issuer, not the MCP server's
+Protected Resource Metadata, decides which authorization server may ever receive the secret or a
+signed client assertion.
 
 ## Layers
 
@@ -81,7 +93,7 @@ domain      -> no outer layer
 
 ```mermaid
 flowchart LR
-    Actor["Person / workload"] --> Client["MCP client"]
+    Actor["Person / service"] --> Client["MCP client"]
     Client -->|"OAuth 2.1 / OIDC"| AS["Authorization server"]
     Client -->|"MCP 2026-07-28"| Server["MCP resource server"]
     Server -.->|"401 / 403 challenge"| Client
@@ -130,8 +142,27 @@ sequenceDiagram
 ```
 
 The non-interactive generic-OIDC path follows the same PRM and authorization-server discovery, but
-uses a pre-registered client ID plus `client_secret_basic` at the token endpoint. It declares the
+uses a pre-registered client ID with either `client_secret_basic` or a `private_key_jwt` client
+assertion at the token endpoint. The SDK builds the token request, and signs the assertion
+(`aud` = authorization-server issuer, 60-second lifetime), only after it has discovered metadata
+for exactly the configured issuer. A PRM that names any other authorization server ends the flow
+before a credential leaves the process. It declares the
 draft `io.modelcontextprotocol/oauth-client-credentials` capability on every MCP request, performs
 no redirect/CIMD/DCR, and lets the SDK reacquire a token with the prior-plus-challenged scope union
 after a pre-dispatch 403. Generic tokens retain their verified `client_id`/`subject`, but are not
 promoted to Entra-style application principals or app roles.
+
+## Protocol evidence policy
+
+The companion server once hid every tool: its unit tests built typed `ListToolsResult` objects by
+hand, while the real SDK passed wire dicts. Acceptance evidence for protocol, authorization,
+cache, and interoperability behavior therefore goes through the real MCP SDK client, a real
+transport, loopback sockets, and deterministic local servers (`tests/integration`, `tests/e2e`).
+Unit tests with hand-built SDK objects remain auxiliary. `tests/unit/test_wire_evidence_hygiene.py`
+rejects fabricated MCP results in the acceptance suites.
+
+The authorized `tools/list` view is principal-dependent and `cacheScope=private`. MCP SDK 2.2 keeps
+private entries for a `Client`'s lifetime and does not evict them when the OAuth provider swaps
+tokens after a scope step-up. After an authorization-context change the client reads the catalog
+with `list_tools(cache_mode="refresh")`, and later cached reads then reflect the new view. The
+server stays authoritative on every call.
