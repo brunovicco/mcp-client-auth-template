@@ -637,7 +637,7 @@ wheels = [
 
 [[package]]
 name = "mcp-client-auth-template"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "a2a-otel-kit", extra = ["mcp"] },
