@@ -70,7 +70,7 @@ P1.7a uses the real companion server checkout:
 
 P1.7b is containerized and consumes a published Server image by immutable digest. It shares the
 P1.7a scenario, including the per-scope `tools/list` assertions, which need a server image with the
-v0.7.0 `tools/list` fix. The digest moves to that image at the pair release:
+v0.7.0 `tools/list` fix; the pinned digest is the published server `v0.7.0` image:
 
 ```bash
 ./scripts/run_compose_demo.sh

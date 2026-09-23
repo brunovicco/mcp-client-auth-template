@@ -74,10 +74,9 @@ The fastest path to evaluate the project is the containerized reference scenario
 ./scripts/run_compose_demo.sh
 ```
 
-It runs the client against the published companion Server `v0.5.0` by immutable digest, performs
-CIMD-first Authorization Code + PKCE, proves scope step-up and negative audience handling, and
-finishes with a deterministic pass/fail banner. The v0.7.0 pair release moves the pinned digest
-to the v0.7.0 server image, which the per-scope `tools/list` assertion needs.
+It runs the client against the published companion Server `v0.7.0` by immutable digest, performs
+CIMD-first Authorization Code + PKCE, proves the per-scope `tools/list` view, scope step-up and
+negative audience handling, and finishes with a deterministic pass/fail banner.
 
 For the full observable proof:
 

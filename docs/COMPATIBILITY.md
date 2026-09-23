@@ -147,8 +147,8 @@ and `private_key_jwt` profiles, the SDK's `list_tools()` result equals the raw J
 `tools/list` result for the same token (`{whoami}` at the initial scope). After the `health`
 step-up, `list_tools(cache_mode="refresh")` and the following cached call both return
 `{whoami, health}`. Unauthenticated `tools/list` receives the server's `401` OAuth challenge.
-These assertions need the companion server's v0.7.0 `tools/list` wire-result fix. Until the pair
-release, run them against the server's v0.7.0 branch, and merge the server first.
+These assertions need the companion server's v0.7.0 `tools/list` wire-result fix (server `v0.7.0`
+or later).
 
 v0.7.0 pair evidence and the tests that prove each entry:
 

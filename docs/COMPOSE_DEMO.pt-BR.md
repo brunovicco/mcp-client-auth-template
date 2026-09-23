@@ -22,7 +22,7 @@ Execute:
 O server é consumido por digest imutável:
 
 ```text
-ghcr.io/brunovicco/mcp-server-auth-template@sha256:4a220992b5df2382b2f821713b8b4c840469e4465395cbdeb1349dee0f8a1110
+ghcr.io/brunovicco/mcp-server-auth-template@sha256:097684a7a0302a849d979ceda201d82d71026186b44f2fa598d994abcdaeb17b
 ```
 
 A demo reutiliza exatamente o cenário do P1.7a e prova MCP `2026-07-28`, Authorization Code + PKCE
@@ -30,9 +30,8 @@ CIMD-first, desafio `401` para `tools/list` sem token, visão de `tools/list` po
 após o step-up, `whoami` autenticado, step-up limitado via `health`, rejeição de audience incorreta
 e ausência de sessão MCP.
 
-A imagem pinada é anterior à correção v0.7.0 do `tools/list` no resultado de wire do server
-companheiro, e a assertion de catálogo por scope depende dela. Até o release do par mover o digest
-para a imagem v0.7.0 do server, esta demo falha na etapa de catálogo.
+O digest pinado é a imagem `v0.7.0` publicada do server companheiro, que inclui a correção do
+`tools/list` no resultado de wire exigida pela assertion de catálogo por scope.
 
 O resumo JSON identifica a topologia como `docker-compose-shared-loopback`.
 

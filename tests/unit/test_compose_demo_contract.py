@@ -8,7 +8,7 @@ _OIDC_DOCKERFILE = _ROOT / "Dockerfile.reference-oidc"
 _WRAPPER = _ROOT / "scripts/run_compose_demo.sh"
 _SERVER_IMAGE = (
     "ghcr.io/brunovicco/mcp-server-auth-template@"
-    "sha256:4a220992b5df2382b2f821713b8b4c840469e4465395cbdeb1349dee0f8a1110"
+    "sha256:097684a7a0302a849d979ceda201d82d71026186b44f2fa598d994abcdaeb17b"
 )
 
 

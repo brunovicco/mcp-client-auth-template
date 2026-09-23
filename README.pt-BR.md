@@ -75,10 +75,9 @@ O caminho mais rápido para avaliar o projeto é o cenário containerizado:
 ./scripts/run_compose_demo.sh
 ```
 
-Ele executa o cliente contra o Server companheiro `v0.5.0` publicado por digest imutável, realiza
-Authorization Code + PKCE CIMD-first, prova step-up de scope e tratamento de audience incorreta e
-termina com um banner determinístico de sucesso/falha. O release v0.7.0 do par move o digest
-pinado para a imagem v0.7.0 do server, exigida pela assertion de `tools/list` por scope.
+Ele executa o cliente contra o Server companheiro `v0.7.0` publicado por digest imutável, realiza
+Authorization Code + PKCE CIMD-first, prova a visão de `tools/list` por scope, step-up de scope e
+tratamento de audience incorreta e termina com um banner determinístico de sucesso/falha.
 
 Para a prova observável completa:
 

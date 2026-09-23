@@ -159,6 +159,6 @@ MCP_E2E_SERVER_ROOT=../mcp-server-auth-template \
 
 The default `uv run pytest` remains self-contained: without `MCP_E2E_SERVER_ROOT`, this module is
 skipped. GitHub Actions runs the dedicated `.github/workflows/e2e.yml`, which checks out the
-companion server and enables the variable explicitly. The v0.7.0 client assertions depend on the
-companion server's v0.7.0 changes, so the server side of the pair merges first. Locally, point
-`MCP_E2E_SERVER_ROOT` at a checkout of the server's v0.7.0 branch.
+companion server and enables the variable explicitly. The v0.7.0 client assertions need companion
+server `v0.7.0` or later. Locally, point `MCP_E2E_SERVER_ROOT` at a checkout of server `v0.7.0` or
+later.
